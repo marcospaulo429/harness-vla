@@ -1,0 +1,420 @@
+"""Fixed primitive library for the Harness VLA beta on EB-Manipulation.
+
+The EB-Manipulation environment consumes a 7-D *discrete* action
+``[X, Y, Z, Roll, Pitch, Yaw, Gripper]`` where:
+
+* ``X, Y, Z`` are voxel indices in ``[0, VOXEL_SIZE]`` (``VOXEL_SIZE == 100``);
+* ``Roll, Pitch, Yaw`` are discrete Euler bins in ``[0, 360 / ROTATION_RESOLUTION]``
+  (``ROTATION_RESOLUTION == 3`` degrees per bin, so bins live in ``[0, 120]``);
+* ``Gripper`` is ``1`` for *open* and ``0`` for *closed*
+  (matches ``is_gripper_open = discrete_action[6]`` in ``eb_man_utils``).
+
+Object coordinates handed to the planner by ``form_object_coord_for_input`` are
+already expressed in voxel indices (``{"object 1": [vx, vy, vz], ...}``), so the
+primitives operate directly in that space.
+
+Design goals for the beta:
+
+* Each primitive *compiles* to one or more discrete actions. Compilation is a
+  pure function of the current end-effector :class:`PoseState`, the primitive
+  arguments, and the object coordinate table. This keeps the whole library unit
+  testable without launching the (heavy) simulator.
+* The single contact-rich primitive ``vla_act`` is a *mock scripted* stand-in for
+  a frozen VLA: it expands a high-level ``grasp``/``place``/``push`` intent into a
+  short burst of analytic sub-actions. In the full framework this would be a
+  frozen VLA policy; here it validates the harness architecture end to end.
+"""
+
+from __future__ import annotations
+
+import copy
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Sequence, Tuple, Union
+
+# Kept in sync with embodiedbench.envs.eb_manipulation.eb_man_utils. Imported
+# lazily / defensively so the primitive library can be unit tested without the
+# manipulation environment's heavy optional dependencies (pyrep, ultralytics).
+try:  # pragma: no cover - exercised indirectly when the env is installed
+    from embodiedbench.envs.eb_manipulation.eb_man_utils import (
+        ROTATION_RESOLUTION as _ROTATION_RESOLUTION,
+        VOXEL_SIZE as _VOXEL_SIZE,
+    )
+    ROTATION_RESOLUTION = int(_ROTATION_RESOLUTION)
+    VOXEL_SIZE = int(_VOXEL_SIZE)
+except Exception:  # pragma: no cover - fallback for isolated unit tests
+    ROTATION_RESOLUTION = 3
+    VOXEL_SIZE = 100
+
+# Discrete rotation bins span [0, 360 / ROTATION_RESOLUTION].
+ROT_MAX = 360 // ROTATION_RESOLUTION
+GRIPPER_OPEN = 1
+GRIPPER_CLOSED = 0
+
+# A conservative top-down-ish neutral orientation used when no orientation is
+# known yet. Values are discrete Euler bins; they can be tuned per task without
+# changing the harness architecture.
+NEUTRAL_ORIENTATION: Tuple[int, int, int] = (60, 60, 60)
+
+# Voxels the gripper is lifted above a target before/after contact (staging).
+DEFAULT_APPROACH_DZ = 8
+# Voxels used for a short post-grasp lift to expose empty grasps.
+DEFAULT_LIFT_DZ = 6
+
+DiscreteAction = List[int]
+
+
+class PrimitiveError(ValueError):
+    """Raised when a primitive invocation cannot be compiled to actions."""
+
+
+@dataclass
+class PoseState:
+    """Current end-effector state in the environment's discrete voxel space."""
+
+    x: int = VOXEL_SIZE // 2
+    y: int = VOXEL_SIZE // 2
+    z: int = VOXEL_SIZE // 2
+    roll: int = NEUTRAL_ORIENTATION[0]
+    pitch: int = NEUTRAL_ORIENTATION[1]
+    yaw: int = NEUTRAL_ORIENTATION[2]
+    gripper: int = GRIPPER_OPEN
+
+    def as_action(self) -> DiscreteAction:
+        return [
+            int(self.x),
+            int(self.y),
+            int(self.z),
+            int(self.roll),
+            int(self.pitch),
+            int(self.yaw),
+            int(self.gripper),
+        ]
+
+    def copy(self) -> "PoseState":
+        return copy.copy(self)
+
+
+def _clamp(value: int, low: int, high: int) -> int:
+    return max(low, min(high, int(round(value))))
+
+
+def _clamp_xyz(xyz: Sequence[float]) -> List[int]:
+    if len(xyz) != 3:
+        raise PrimitiveError(f"xyz must have 3 elements, got {xyz!r}")
+    return [_clamp(v, 0, VOXEL_SIZE) for v in xyz]
+
+
+def _clamp_rot(value: float) -> int:
+    return _clamp(value, 0, ROT_MAX)
+
+
+def _normalize_gripper(value: Union[int, str, None], default: int) -> int:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in ("open", "opened", "release", "1"):
+            return GRIPPER_OPEN
+        if v in ("close", "closed", "grip", "grasp", "0"):
+            return GRIPPER_CLOSED
+        raise PrimitiveError(f"Unknown gripper state: {value!r}")
+    if int(value) in (GRIPPER_OPEN, GRIPPER_CLOSED):
+        return int(value)
+    raise PrimitiveError(f"Gripper must be 0/1 or open/close, got {value!r}")
+
+
+@dataclass
+class PrimitiveResult:
+    """Outcome of compiling a primitive invocation.
+
+    Attributes
+    ----------
+    name:
+        Canonical primitive name.
+    actions:
+        Ordered list of discrete 7-D actions to feed to ``env.step``.
+    end_pose:
+        The intended pose after all actions execute (best-effort bookkeeping).
+    is_contact:
+        Whether this primitive is the contact-rich ``vla_act`` primitive.
+    meta:
+        Extra structured info recorded into the audit trace.
+    """
+
+    name: str
+    actions: List[DiscreteAction]
+    end_pose: PoseState
+    is_contact: bool = False
+    meta: Dict = field(default_factory=dict)
+
+
+class PrimitiveLibrary:
+    """Compiles high-level primitive invocations into discrete env actions.
+
+    The library is *fixed*: the planner may only invoke the primitives declared
+    in :attr:`PRIMITIVES`. It cannot invent new primitives at deployment time,
+    matching the Harness VLA constraint.
+    """
+
+    #: Canonical analytic primitives available on EB-Manipulation.
+    ANALYTIC_PRIMITIVES = (
+        "move_to",
+        "rotate_wrist",
+        "rotate_pitch",
+        "set_gripper",
+        "release",
+    )
+    #: The single learned contact-rich primitive (mock scripted here).
+    CONTACT_PRIMITIVE = "vla_act"
+    PRIMITIVES = ANALYTIC_PRIMITIVES + (CONTACT_PRIMITIVE,)
+
+    def __init__(
+        self,
+        approach_dz: int = DEFAULT_APPROACH_DZ,
+        lift_dz: int = DEFAULT_LIFT_DZ,
+    ) -> None:
+        self.approach_dz = int(approach_dz)
+        self.lift_dz = int(lift_dz)
+
+    # -- target resolution ------------------------------------------------
+
+    @staticmethod
+    def resolve_target(
+        target: Union[str, Sequence[float]],
+        object_coords: Optional[Dict[str, Sequence[float]]],
+    ) -> List[int]:
+        """Resolve a primitive target to voxel ``[x, y, z]``.
+
+        ``target`` may be an explicit ``[x, y, z]`` list or an object key present
+        in ``object_coords`` (e.g. ``"object 1"``).
+        """
+        if isinstance(target, (list, tuple)):
+            return _clamp_xyz(target)
+        if not isinstance(target, str):
+            raise PrimitiveError(f"target must be a name or [x,y,z], got {target!r}")
+        if not object_coords:
+            raise PrimitiveError(
+                f"target {target!r} is a name but no object coordinates were provided"
+            )
+        key = target.strip()
+        if key in object_coords:
+            return _clamp_xyz(object_coords[key])
+        # Tolerant matching: 'object1' -> 'object 1', case-insensitive.
+        normalized = {k.replace(" ", "").lower(): k for k in object_coords}
+        probe = key.replace(" ", "").lower()
+        if probe in normalized:
+            return _clamp_xyz(object_coords[normalized[probe]])
+        raise PrimitiveError(
+            f"Unknown target {target!r}; known objects: {sorted(object_coords)}"
+        )
+
+    # -- primitive compilation -------------------------------------------
+
+    def compile(
+        self,
+        invocation: Dict,
+        pose: PoseState,
+        object_coords: Optional[Dict[str, Sequence[float]]] = None,
+    ) -> PrimitiveResult:
+        """Compile a JSON-style primitive invocation to discrete actions.
+
+        Parameters
+        ----------
+        invocation:
+            Dict with an ``action`` field naming the primitive plus its
+            arguments (e.g. ``{"action": "move_to", "xyz": [50, 60, 20]}``).
+        pose:
+            Current end-effector pose; used to fill unspecified dimensions.
+        object_coords:
+            Mapping of object names to voxel coordinates for target resolution.
+        """
+        if not isinstance(invocation, dict):
+            raise PrimitiveError(f"invocation must be a dict, got {type(invocation)}")
+        name = invocation.get("action")
+        if name is None:
+            raise PrimitiveError("invocation missing 'action' field")
+        name = str(name).strip()
+        if name not in self.PRIMITIVES:
+            raise PrimitiveError(
+                f"Unknown primitive {name!r}; allowed: {self.PRIMITIVES}"
+            )
+        handler = getattr(self, f"_compile_{name}")
+        return handler(invocation, pose.copy(), object_coords)
+
+    def _compile_move_to(self, inv, pose, object_coords) -> PrimitiveResult:
+        target = inv.get("xyz", inv.get("target"))
+        if target is None:
+            raise PrimitiveError("move_to requires 'xyz' or 'target'")
+        x, y, z = self.resolve_target(target, object_coords)
+        gripper = _normalize_gripper(inv.get("gripper"), pose.gripper)
+        end = pose.copy()
+        end.x, end.y, end.z, end.gripper = x, y, z, gripper
+        return PrimitiveResult("move_to", [end.as_action()], end)
+
+    def _compile_rotate_wrist(self, inv, pose, object_coords) -> PrimitiveResult:
+        if "target_yaw" not in inv and "yaw" not in inv:
+            raise PrimitiveError("rotate_wrist requires 'target_yaw'")
+        yaw = _clamp_rot(inv.get("target_yaw", inv.get("yaw")))
+        end = pose.copy()
+        end.yaw = yaw
+        return PrimitiveResult("rotate_wrist", [end.as_action()], end)
+
+    def _compile_rotate_pitch(self, inv, pose, object_coords) -> PrimitiveResult:
+        if "target_pitch" not in inv and "pitch" not in inv:
+            raise PrimitiveError("rotate_pitch requires 'target_pitch'")
+        pitch = _clamp_rot(inv.get("target_pitch", inv.get("pitch")))
+        end = pose.copy()
+        end.pitch = pitch
+        return PrimitiveResult("rotate_pitch", [end.as_action()], end)
+
+    def _compile_set_gripper(self, inv, pose, object_coords) -> PrimitiveResult:
+        state = inv.get("gripper", inv.get("state"))
+        if state is None:
+            raise PrimitiveError("set_gripper requires 'gripper' (open/close)")
+        gripper = _normalize_gripper(state, pose.gripper)
+        end = pose.copy()
+        end.gripper = gripper
+        return PrimitiveResult("set_gripper", [end.as_action()], end)
+
+    def _compile_release(self, inv, pose, object_coords) -> PrimitiveResult:
+        end = pose.copy()
+        end.gripper = GRIPPER_OPEN
+        actions = [end.as_action()]
+        # Optional short retreat lift to clear the released object.
+        if inv.get("lift", False):
+            lifted = end.copy()
+            lifted.z = _clamp(lifted.z + self.lift_dz, 0, VOXEL_SIZE)
+            actions.append(lifted.as_action())
+            end = lifted
+        return PrimitiveResult("release", actions, end)
+
+    def _compile_vla_act(self, inv, pose, object_coords) -> PrimitiveResult:
+        """Mock scripted stand-in for a frozen contact-rich VLA policy.
+
+        Supported modes:
+
+        * ``grasp``: stage above the target (open), descend onto it (open),
+          close the gripper, then a short lift to expose empty grasps.
+        * ``place``: stage above the destination (closed), descend, open to
+          release.
+        * ``push``: descend onto the target and translate toward an optional
+          ``direction`` offset while keeping the gripper closed.
+        """
+        mode = str(inv.get("mode", inv.get("prompt", "grasp"))).strip().lower()
+        # Allow natural-language prompts to imply a mode.
+        if "place" in mode or "put" in mode or "drop" in mode:
+            mode = "place"
+        elif "push" in mode or "wipe" in mode:
+            mode = "push"
+        else:
+            mode = "grasp"
+
+        target = inv.get("target", inv.get("xyz"))
+        if target is None:
+            raise PrimitiveError("vla_act requires 'target' or 'xyz'")
+        x, y, z = self.resolve_target(target, object_coords)
+        approach_dz = int(inv.get("approach_dz", self.approach_dz))
+        lift_dz = int(inv.get("lift_dz", self.lift_dz))
+
+        actions: List[DiscreteAction] = []
+        cur = pose.copy()
+
+        if mode == "grasp":
+            above = cur.copy()
+            above.x, above.y = x, y
+            above.z = _clamp(z + approach_dz, 0, VOXEL_SIZE)
+            above.gripper = GRIPPER_OPEN
+            actions.append(above.as_action())
+
+            on = above.copy()
+            on.z = z
+            on.gripper = GRIPPER_OPEN
+            actions.append(on.as_action())
+
+            close = on.copy()
+            close.gripper = GRIPPER_CLOSED
+            actions.append(close.as_action())
+
+            lift = close.copy()
+            lift.z = _clamp(z + lift_dz, 0, VOXEL_SIZE)
+            actions.append(lift.as_action())
+            end = lift
+            meta = {"mode": "grasp", "target_voxel": [x, y, z]}
+
+        elif mode == "place":
+            above = cur.copy()
+            above.x, above.y = x, y
+            above.z = _clamp(z + approach_dz, 0, VOXEL_SIZE)
+            above.gripper = GRIPPER_CLOSED
+            actions.append(above.as_action())
+
+            on = above.copy()
+            on.z = z
+            on.gripper = GRIPPER_CLOSED
+            actions.append(on.as_action())
+
+            release = on.copy()
+            release.gripper = GRIPPER_OPEN
+            actions.append(release.as_action())
+            end = release
+            meta = {"mode": "place", "target_voxel": [x, y, z]}
+
+        else:  # push
+            direction = inv.get("direction", [0, 0, 0])
+            if len(direction) != 3:
+                raise PrimitiveError("push direction must be [dx, dy, dz]")
+            on = cur.copy()
+            on.x, on.y, on.z = x, y, z
+            on.gripper = GRIPPER_CLOSED
+            actions.append(on.as_action())
+
+            pushed = on.copy()
+            pushed.x = _clamp(x + direction[0], 0, VOXEL_SIZE)
+            pushed.y = _clamp(y + direction[1], 0, VOXEL_SIZE)
+            pushed.z = _clamp(z + direction[2], 0, VOXEL_SIZE)
+            actions.append(pushed.as_action())
+            end = pushed
+            meta = {"mode": "push", "target_voxel": [x, y, z], "direction": direction}
+
+        return PrimitiveResult("vla_act", actions, end, is_contact=True, meta=meta)
+
+
+def pose_from_observation(obs: Dict) -> Optional[PoseState]:
+    """Best-effort extraction of the current EE pose in voxel space from an obs.
+
+    EB-Manipulation observations expose ``gripper_pose`` (world xyz + quat) and
+    ``gripper_open``. We convert the world position to a voxel index and the
+    quaternion to discrete Euler bins so primitives can preserve unspecified
+    dimensions. Returns ``None`` if the observation lacks the needed fields.
+    """
+    if not isinstance(obs, dict):
+        return None
+    gripper_pose = obs.get("gripper_pose")
+    if gripper_pose is None:
+        return None
+    try:  # Imported lazily to avoid hard dependency during unit tests.
+        import numpy as np
+        from scipy.spatial.transform import Rotation
+        from embodiedbench.envs.eb_manipulation.eb_man_utils import (
+            point_to_voxel_index,
+            ROTATION_RESOLUTION as RR,
+        )
+
+        pos = np.asarray(gripper_pose[:3], dtype=float)
+        voxel = list(point_to_voxel_index(pos))
+        quat = np.asarray(gripper_pose[3:7], dtype=float)
+        euler = Rotation.from_quat(quat).as_euler("xyz", degrees=True)
+        disc = [(int(round((e + 180) / RR))) for e in euler]
+        gripper_open = obs.get("gripper_open", 1.0)
+        gripper = GRIPPER_OPEN if float(gripper_open) >= 0.5 else GRIPPER_CLOSED
+        return PoseState(
+            x=_clamp(voxel[0], 0, VOXEL_SIZE),
+            y=_clamp(voxel[1], 0, VOXEL_SIZE),
+            z=_clamp(voxel[2], 0, VOXEL_SIZE),
+            roll=_clamp_rot(disc[0]),
+            pitch=_clamp_rot(disc[1]),
+            yaw=_clamp_rot(disc[2]),
+            gripper=gripper,
+        )
+    except Exception:
+        return None

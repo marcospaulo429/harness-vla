@@ -1,0 +1,143 @@
+"""Unit tests for GlobalMemory and the planner JSON parsing (no network)."""
+
+import json
+
+from embodiedbench.planner.harness.global_memory import (
+    GlobalMemory,
+    SEED_FAILURE_MODELS,
+    SEED_SUCCESS_RULES,
+)
+from embodiedbench.planner.harness.harness_planner import (
+    HarnessPlanner,
+    extract_json_object,
+)
+
+
+# ---- GlobalMemory ----------------------------------------------------------
+
+def test_seeded_memory_has_rules():
+    gm = GlobalMemory.seeded()
+    assert gm.success_rules == SEED_SUCCESS_RULES
+    assert gm.failure_models == SEED_FAILURE_MODELS
+
+
+def test_render_includes_rules():
+    gm = GlobalMemory.seeded()
+    text = gm.render()
+    assert "Success rules:" in text
+    assert "Failure models:" in text
+    assert "empty grasp" in text.lower()
+
+
+def test_save_and_load_roundtrip(tmp_path):
+    path = tmp_path / "gm.json"
+    gm = GlobalMemory(success_rules=["r1"], failure_models=["f1"])
+    gm.save(str(path))
+    loaded = GlobalMemory.load(str(path))
+    assert loaded.success_rules == ["r1"]
+    assert loaded.failure_models == ["f1"]
+
+
+def test_load_missing_falls_back_to_seed(tmp_path):
+    gm = GlobalMemory.load(str(tmp_path / "nope.json"))
+    assert gm.success_rules == SEED_SUCCESS_RULES
+
+
+def test_load_corrupt_falls_back(tmp_path):
+    path = tmp_path / "bad.json"
+    path.write_text("{not json", encoding="utf-8")
+    gm = GlobalMemory.load(str(path))
+    assert gm.success_rules == SEED_SUCCESS_RULES
+
+
+# ---- JSON extraction -------------------------------------------------------
+
+def test_extract_plain_json():
+    obj = extract_json_object('{"action": {"action": "move_to", "xyz": [1,2,3]}}')
+    assert obj["action"]["action"] == "move_to"
+
+
+def test_extract_from_markdown_fence():
+    text = 'Sure!\n```json\n{"action": {"action": "release"}}\n```\n'
+    obj = extract_json_object(text)
+    assert obj["action"]["action"] == "release"
+
+
+def test_extract_with_surrounding_prose():
+    text = 'Here is my plan: {"reasoning": "x", "action": {"action": "set_gripper", "gripper": "close"}} done.'
+    obj = extract_json_object(text)
+    assert obj["action"]["action"] == "set_gripper"
+
+
+def test_extract_trailing_comma():
+    obj = extract_json_object('{"action": {"action": "move_to", "xyz": [1,2,3],},}')
+    assert obj["action"]["action"] == "move_to"
+
+
+def test_extract_invalid_returns_none():
+    assert extract_json_object("no json here") is None
+    assert extract_json_object("") is None
+
+
+# ---- HarnessPlanner with a fake client ------------------------------------
+
+class _FakeMessage:
+    def __init__(self, content):
+        self.message = type("M", (), {"content": content})
+
+
+class _FakeCompletions:
+    def __init__(self, content):
+        self._content = content
+
+    def create(self, **kwargs):
+        return type("R", (), {"choices": [_FakeMessage(self._content)]})
+
+
+class _FakeChat:
+    def __init__(self, content):
+        self.completions = _FakeCompletions(content)
+
+
+class _FakeClient:
+    def __init__(self, content):
+        self.chat = _FakeChat(content)
+
+
+def _planner(content):
+    return HarnessPlanner(model_name="fake", client=_FakeClient(content))
+
+
+def test_planner_parses_nested_action():
+    planner = _planner('{"reasoning": "go", "action": {"action": "move_to", "xyz": [5,5,5]}}')
+    inv, raw = planner.act("pick the cube", {"object 1": [5, 5, 5]}, [50, 50, 50, 60, 60, 60, 1], [])
+    assert inv["action"] == "move_to"
+    assert planner.output_json_error == 0
+    assert planner.planner_steps == 1
+
+
+def test_planner_parses_bare_invocation():
+    planner = _planner('{"action": "release", "lift": true}')
+    inv, _ = planner.act("x", {}, [0, 0, 0, 0, 0, 0, 1], [])
+    assert inv["action"] == "release"
+
+
+def test_planner_counts_json_error():
+    planner = _planner("I cannot help with that")
+    inv, _ = planner.act("x", {}, [0, 0, 0, 0, 0, 0, 1], [])
+    assert inv is None
+    assert planner.output_json_error == 1
+
+
+def test_planner_reset():
+    planner = _planner("garbage")
+    planner.act("x", {}, [0, 0, 0, 0, 0, 0, 1], [])
+    planner.reset()
+    assert planner.planner_steps == 0
+    assert planner.output_json_error == 0
+
+
+def test_system_prompt_contains_primitives():
+    planner = _planner("{}")
+    assert "vla_act" in planner.system_prompt
+    assert "move_to" in planner.system_prompt

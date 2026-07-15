@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+2607.08448v2.pdf
+
+# harness beta test venv
+.venv-harness/
