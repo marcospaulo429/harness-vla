@@ -2,7 +2,6 @@ import os
 from typing import List
 import numpy as np
 from pyrep.objects import VisionSensor
-from ultralytics import YOLO
 import cv2
 from scipy.spatial.transform import Rotation
 
@@ -11,7 +10,19 @@ ROTATION_RESOLUTION = 3
 VOXEL_SIZE = 100
 CAMERAS = ['front', 'left_shoulder', 'right_shoulder', 'wrist']
 USE_GENERAL_OBJECT_NAMES = True
-object_detection_model = YOLO("yolo11n.pt")
+
+# ultralytics/YOLO (and its torch dependency) is only needed for the visual
+# detection-box path (draw_bounding_boxes). Load it lazily so the language-only
+# harness path does not require torch/ultralytics.
+object_detection_model = None
+
+
+def _get_object_detection_model():
+    global object_detection_model
+    if object_detection_model is None:
+        from ultralytics import YOLO
+        object_detection_model = YOLO("yolo11n.pt")
+    return object_detection_model
 
 # From https://github.com/stepjam/RLBench/blob/master/rlbench/backend/utils.py
 def point_to_voxel_index(
@@ -210,7 +221,7 @@ def draw_bounding_boxes(image_path_list, world_points, camera_extrinsics_list, c
         pixel_points_2D, _ = cv2.projectPoints(np.array(world_points), rvec, tvec, camera_intrinsics, np.zeros(4))
 
         # get the bounding boxes using YOLO
-        results = object_detection_model.predict(source=input_image_path, conf=0.0001, line_width=1, verbose=False)
+        results = _get_object_detection_model().predict(source=input_image_path, conf=0.0001, line_width=1, verbose=False)
         predicted_boxes = results[0].boxes.xyxy
         image_bgr = cv2.imread(input_image_path, cv2.IMREAD_COLOR)
 

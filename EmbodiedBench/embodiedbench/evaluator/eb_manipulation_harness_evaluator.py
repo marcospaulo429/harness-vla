@@ -235,6 +235,7 @@ class EB_ManipulationHarnessEvaluator:
                 eval_set=self.eval_set,
                 img_size=(self.config['resolution'], self.config['resolution']),
                 down_sample_ratio=self.config['down_sample_ratio'],
+                selected_indexes=list(self.config.get('selected_indexes', []) or []),
                 log_path=self.log_path,
             )
             self.env._max_episode_steps = self.max_env_steps

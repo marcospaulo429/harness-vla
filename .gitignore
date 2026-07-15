@@ -220,3 +220,11 @@ __marimo__/
 
 # harness beta test venv
 .venv-harness/
+
+# EB-Manipulation heavy runtime artifacts (installed locally, not vendored)
+EmbodiedBench/CoppeliaSim_Pro_V4_1_0_Ubuntu20_04/
+EmbodiedBench/embodiedbench/envs/eb_manipulation/PyRep/
+EmbodiedBench/embodiedbench/envs/eb_manipulation/data/
+EmbodiedBench/.harness_env.sh
+EmbodiedBench/running/
+*.egg-info/

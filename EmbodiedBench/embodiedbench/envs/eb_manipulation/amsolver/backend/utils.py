@@ -24,7 +24,9 @@ from copy import deepcopy
 from pyrep.backend import sim
 from scipy.spatial.transform import Rotation as R
 
-from tools.grasploc import Grasploc, define_default_args
+# NOTE: tools.grasploc pulls in open3d and is only needed for offline grasp-pose
+# generation (get_local_grasp_pose). Import it lazily so the runtime eval path
+# does not require open3d.
 
 def ClipFloatValues(float_array, min_value, max_value):
   """Clips values to the range [min_value, max_value].
@@ -432,6 +434,7 @@ def get_sorted_grasp_pose(obj_pose, local_grasp_pose, sort_key="vertical"):
   return grasp_pose
 
 def get_local_grasp_pose(obj: Object, ply_file: str, grasp_pose_path = './vlm/grasp_poses/', need_rebuild=False, use_meshlab=True, crop_box:Object =None):
+  from tools.grasploc import Grasploc, define_default_args
   args = define_default_args()
   args.input_file = ply_file
   args.output_file = os.path.join(grasp_pose_path, ply_file.split('/')[-1][:-4] + '.pkl')
