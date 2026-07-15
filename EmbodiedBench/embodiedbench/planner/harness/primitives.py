@@ -50,6 +50,18 @@ ROT_MAX = 360 // ROTATION_RESOLUTION
 GRIPPER_OPEN = 1
 GRIPPER_CLOSED = 0
 
+# Canonical primitive names (module-level so parsing helpers can reference them
+# without instantiating the library).
+ANALYTIC_PRIMITIVE_NAMES: Tuple[str, ...] = (
+    "move_to",
+    "rotate_wrist",
+    "rotate_pitch",
+    "set_gripper",
+    "release",
+)
+CONTACT_PRIMITIVE_NAME = "vla_act"
+PRIMITIVE_NAMES: Tuple[str, ...] = ANALYTIC_PRIMITIVE_NAMES + (CONTACT_PRIMITIVE_NAME,)
+
 # A conservative top-down-ish neutral orientation used when no orientation is
 # known yet. Values are discrete Euler bins; they can be tuned per task without
 # changing the harness architecture.
@@ -123,6 +135,38 @@ def _normalize_gripper(value: Union[int, str, None], default: int) -> int:
     raise PrimitiveError(f"Gripper must be 0/1 or open/close, got {value!r}")
 
 
+def normalize_invocation(obj: object) -> Optional[Dict]:
+    """Coerce a variety of model output shapes into a canonical invocation.
+
+    Canonical form is ``{"action": <name>, ...args}``. Accepted inputs:
+
+    * ``{"action": <name>, ...}`` (already canonical);
+    * ``{"reasoning": ..., "action": {...}}`` (nested — unwrapped recursively);
+    * ``{"<primitive_name>": {...args}}`` (name-as-key, common with small models).
+
+    Returns ``None`` if no single primitive can be identified.
+    """
+    if not isinstance(obj, dict):
+        return None
+    if "action" in obj:
+        val = obj["action"]
+        if isinstance(val, str):
+            # Bare canonical form; drop non-argument bookkeeping fields.
+            return {k: v for k, v in obj.items() if k != "reasoning"}
+        if isinstance(val, dict):
+            return normalize_invocation(val)
+        return None
+    # Name-as-key form: exactly one key naming a known primitive.
+    prim_keys = [k for k in obj if k in PRIMITIVE_NAMES]
+    if len(prim_keys) == 1:
+        name = prim_keys[0]
+        args = obj[name]
+        if isinstance(args, dict):
+            return {"action": name, **args}
+        return {"action": name}
+    return None
+
+
 @dataclass
 class PrimitiveResult:
     """Outcome of compiling a primitive invocation.
@@ -157,16 +201,10 @@ class PrimitiveLibrary:
     """
 
     #: Canonical analytic primitives available on EB-Manipulation.
-    ANALYTIC_PRIMITIVES = (
-        "move_to",
-        "rotate_wrist",
-        "rotate_pitch",
-        "set_gripper",
-        "release",
-    )
+    ANALYTIC_PRIMITIVES = ANALYTIC_PRIMITIVE_NAMES
     #: The single learned contact-rich primitive (mock scripted here).
-    CONTACT_PRIMITIVE = "vla_act"
-    PRIMITIVES = ANALYTIC_PRIMITIVES + (CONTACT_PRIMITIVE,)
+    CONTACT_PRIMITIVE = CONTACT_PRIMITIVE_NAME
+    PRIMITIVES = PRIMITIVE_NAMES
 
     def __init__(
         self,
@@ -230,6 +268,10 @@ class PrimitiveLibrary:
         """
         if not isinstance(invocation, dict):
             raise PrimitiveError(f"invocation must be a dict, got {type(invocation)}")
+        normalized = normalize_invocation(invocation)
+        if normalized is None:
+            raise PrimitiveError(f"could not identify a primitive in {invocation!r}")
+        invocation = normalized
         name = invocation.get("action")
         if name is None:
             raise PrimitiveError("invocation missing 'action' field")

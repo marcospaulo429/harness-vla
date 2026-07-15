@@ -122,6 +122,21 @@ def test_planner_parses_bare_invocation():
     assert inv["action"] == "release"
 
 
+def test_planner_parses_name_as_key_form():
+    # Small models often emit {"action": {"vla_act": {...}}} or {"vla_act": {...}}.
+    planner = _planner('{"reasoning": "grasp", "action": {"vla_act": {"target": "object 1", "mode": "grasp"}}}')
+    inv, _ = planner.act("x", {"object 1": [1, 2, 3]}, [0, 0, 0, 0, 0, 0, 1], [])
+    assert inv["action"] == "vla_act"
+    assert inv["target"] == "object 1"
+
+
+def test_planner_parses_top_level_name_key():
+    planner = _planner('{"move_to": {"xyz": [5, 5, 5]}}')
+    inv, _ = planner.act("x", {}, [0, 0, 0, 0, 0, 0, 1], [])
+    assert inv["action"] == "move_to"
+    assert inv["xyz"] == [5, 5, 5]
+
+
 def test_planner_counts_json_error():
     planner = _planner("I cannot help with that")
     inv, _ = planner.act("x", {}, [0, 0, 0, 0, 0, 0, 1], [])

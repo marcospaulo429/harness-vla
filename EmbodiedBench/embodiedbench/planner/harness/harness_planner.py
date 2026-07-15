@@ -18,6 +18,7 @@ import re
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from embodiedbench.planner.harness.global_memory import GlobalMemory
+from embodiedbench.planner.harness.primitives import normalize_invocation
 from embodiedbench.planner.harness.prompts import (
     build_system_prompt,
     build_turn_prompt,
@@ -179,12 +180,10 @@ class HarnessPlanner:
         if parsed is None:
             self.output_json_error += 1
             return None, raw_text
-        # Accept either {"action": {...}} or a bare invocation {"action": name, ...}.
-        invocation = parsed.get("action")
-        if isinstance(invocation, dict):
-            return invocation, raw_text
-        if isinstance(invocation, str):
-            # Bare form: the whole object is the invocation.
-            return parsed, raw_text
-        self.output_json_error += 1
-        return None, raw_text
+        # Coerce the many shapes small models emit into a canonical invocation
+        # {"action": <name>, ...args}.
+        invocation = normalize_invocation(parsed)
+        if invocation is None:
+            self.output_json_error += 1
+            return None, raw_text
+        return invocation, raw_text
