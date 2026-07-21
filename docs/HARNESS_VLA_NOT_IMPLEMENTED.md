@@ -1,5 +1,8 @@
 # Harness VLA — beta scope and what is NOT implemented yet
 
+> For the complete architecture, installation history, paper comparison, and
+> 10-episode evaluation results, see [HARNESS_VLA_BETA_REPORT.md](HARNESS_VLA_BETA_REPORT.md).
+
 This repository contains a **simplified beta** of the Harness VLA framework
 (arXiv:2607.08448) built on top of EmbodiedBench's **EB-Manipulation** environment.
 The goal of this beta is a **sanity check**: validate that the harness
