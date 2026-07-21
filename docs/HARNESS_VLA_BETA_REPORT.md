@@ -88,7 +88,7 @@ O planner não pode inventar novas primitivas. A biblioteca mantém a mesma sepa
 - `place`: staging acima do destino → descida → abertura;
 - `push`: aproximação no alvo → deslocamento na direção solicitada.
 
-Esse mock permite testar a fronteira planner/primitiva e o loop de feedback. Ele **não** possui visão, action chunks aprendidos, prompt condicionado em câmera, stop predicate aprendido ou capacidade de contato comparável a π0.5/RLDX-1/LingBot-VLA.
+Esse mock permite testar a fronteira planner/primitiva e o loop de feedback. Ele **não** possui visão, action chunks aprendidos, prompt condicionado em câmera, predicado de parada `τ` configurável por interação ou capacidade de contato comparável a π0.5/RLDX-1/LingBot-VLA. O paper define `τ` como específico do benchmark/interação; não especifica um algoritmo ou threshold universal, nem exige que ele seja aprendido.
 
 ### 2.5 Memória
 
@@ -135,12 +135,12 @@ Os artefatos ficam em `EmbodiedBench/running/` e são ignorados pelo Git por ser
 | Loop fechado observar → agir → observar | Implementado | nova percepção e feedback após cada primitiva |
 | Biblioteca pequena e fixa | Implementado | cinco analíticas + `vla_act`; sem expansão em deployment |
 | Separação contato vs. não contato | Implementado no design | prompt e schemas reservam `vla_act` para contato |
-| `vla_act` retryable | Parcial | planner pode chamá-la novamente, mas diagnóstico de contato é grosseiro |
+| `vla_act` retryable | Parcial | planner pode chamá-la novamente; grasp usa attachment e geometria, mas ainda não há chunks de VLA real nem `τ` formal |
 | Global Memory | Parcial | regras e failure models existem, porém são manuais e estáticos |
 | Predicado oficial de sucesso | Implementado | `task_success` do EB-Manipulation é a verdade final |
 | Budget e política de término | Implementado | 12 turns e 30 env steps na avaliação |
 | Auditabilidade | Implementado | JSONL por turno e JSON de métricas |
-| Re-grounding por turno | Parcial | coordenadas são atualizadas, mas vêm de percepção estruturada simplificada |
+| Re-grounding por turno | Parcial | IDs estáveis, papéis e coordenadas são atualizados, mas vêm de percepção estruturada simplificada |
 
 ### 3.2 Similaridade real
 

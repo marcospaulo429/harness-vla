@@ -24,10 +24,16 @@ or **stubbed** in this beta, so the gap to a full implementation is explicit.
   primitive invocation per turn; the loop executes it, re-perceives, and iterates.
 - **Global Memory** (`global_memory.py`): a **fixed manual seed** of
   task-independent success rules and failure models, injected into the prompt.
-- **Perception as text**: object coordinates from `form_object_coord_for_input`
-  are passed to the planner as a voxel coordinate table (language-only).
+- **Perception as text**: stable object IDs, semantic roles, labels and voxel
+  coordinates from `form_harness_grounding_for_input` are passed to the planner
+  (language-only). Bindings are refreshed from each observation.
 - **Audit traces**: a per-episode JSONL trace of every primitive, its compiled
   actions, and environment feedback.
+- **Contact-outcome inspection**: grasp attachment is authoritative when the
+  simulator exposes it; lift, distance and co-motion geometry provide supporting
+  evidence. Primitive post-condition remains separate from benchmark success.
+- **Semantic safety guards**: grasp/place role validation, verified-held-object
+  requirement and bounded rejection of repeated no-progress calls.
 - **Deterministic runs**: fixed seed, temperature 0.
 
 ## What is NOT implemented (deferred)
@@ -40,8 +46,9 @@ a trained VLA invoked at the moment of contact.
 
 ### 2. Task Specific Memory (few-shot / bootstrapping)
 The paper's per-task procedural (JSONL) + semantic (JSON) memory that is built
-during an exploratory phase and **re-grounded per scene** is **not implemented**.
-The beta is **zero-shot only** — no exploration, no accumulated task traces.
+during an exploratory phase is **not implemented**. The beta is **zero-shot
+only** — no exploration and no accumulated task traces. Per-turn scene bindings
+are refreshed, but this is not Task Specific Memory retrieval or seed transfer.
 
 ### 3. Automatic Global Memory updates
 Global Memory is a **static hand-written seed**. The paper distills success rules
@@ -62,10 +69,12 @@ The paper's asynchronous REPL contract (`command.json` / `state_NN.json` /
 Only the tabletop arm primitives are implemented. Mobile-base primitives
 (`navigate_to` / `move_base`) and bimanual coordination are **out of scope**.
 
-### 7. Robust contact-outcome inspection
-Empty-grasp and false-success detection exist only as **prompt guidance** in the
-Global Memory seed and as coarse `action_success` feedback. There is no
-quantitative post-grasp displacement check or dedicated contact-outcome classifier.
+### 7. Generalized primitive post-conditions
+Grasp now has a dedicated outcome classifier using attachment and quantitative
+geometry, and place/release has conservative attachment-aware termination
+feedback. Uniform post-condition predicates for every analytic primitive,
+including pose-tolerance checks for motion, are still deferred. Local geometric
+thresholds are beta configuration details, not universal thresholds from the paper.
 
 ### 8. Other benchmarks
 Only EB-Manipulation is wired. LIBERO / RoboCasa / RoboTwin and the other
