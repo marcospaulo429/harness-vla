@@ -15,10 +15,20 @@ from embodiedbench.planner.harness.primitives import (
     PoseState,
 )
 from embodiedbench.planner.harness.global_memory import GlobalMemory
+from embodiedbench.planner.harness.vla_runtime import (
+    VLABackend,
+    VLAChunkRecord,
+    VLARuntime,
+    VLARuntimeResult,
+)
 
 __all__ = [
     "PrimitiveLibrary",
     "PrimitiveError",
     "PoseState",
     "GlobalMemory",
+    "VLABackend",
+    "VLAChunkRecord",
+    "VLARuntime",
+    "VLARuntimeResult",
 ]

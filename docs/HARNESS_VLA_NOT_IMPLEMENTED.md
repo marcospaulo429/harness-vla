@@ -32,6 +32,9 @@ or **stubbed** in this beta, so the gap to a full implementation is explicit.
 - **Contact-outcome inspection**: grasp attachment is authoritative when the
   simulator exposes it; lift, distance and co-motion geometry provide supporting
   evidence. Primitive post-condition remains separate from benchmark success.
+- **VLA runtime contract** (`vla_runtime.py`): a backend-neutral, task-conditioned
+  chunk loop with live observations, configurable `tau`, a hard `max_chunks` cap,
+  early return and per-chunk audit records. It is ready for a future policy adapter.
 - **Semantic safety guards**: grasp/place role validation, verified-held-object
   requirement and bounded rejection of repeated no-progress calls.
 - **Deterministic runs**: fixed seed, temperature 0.
@@ -42,7 +45,9 @@ or **stubbed** in this beta, so the gap to a full implementation is explicit.
 `vla_act` is a **mock scripted** contact primitive: it expands a
 `grasp`/`place`/`push` intent into a short burst of analytic sub-actions. There is
 **no frozen Vision-Language-Action policy**. The full framework replaces this with
-a trained VLA invoked at the moment of contact.
+a trained VLA invoked at the moment of contact. The backend-neutral chunk runtime
+does not wrap this mock or claim that its compiled actions are learned chunks;
+integration requires a future real frozen-VLA adapter.
 
 ### 2. Task Specific Memory (few-shot / bootstrapping)
 The paper's per-task procedural (JSONL) + semantic (JSON) memory that is built

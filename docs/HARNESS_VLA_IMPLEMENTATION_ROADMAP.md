@@ -28,17 +28,20 @@
 - **Tipo:** paper-confirmed; thresholds são paper-compatible.
 - **Fonte:** §2.1, §2.3, Apêndices B e C.
 - **Objetivo:** separar execução válida, pós-condição da primitiva e sucesso da tarefa.
-- **Estado:** em implementação; grasp possui attachment/geometria, termination reason e guard de place.
+- **Estado:** núcleo M1 implementado; grasp possui attachment/geometria, termination reason e guard de place.
 - **Próximo incremento:** pós-condição de release/place e `move_to` por tolerância.
 - **Aceitação:** nenhum `action_success` isolado vira sucesso semântico.
 
 ### M2 — Contrato `vla_act(prompt, max_chunks, τ)`
 
 - **Tipo:** paper-confirmed; catálogo/threshold de `τ` é benchmark-specific.
-- **Fonte:** §2.3, Apêndices A e B.
+- **Fonte:** §2.3, Apêndices B, C e E.5.
 - **Objetivo:** budget por chunks, early return e razão de término.
-- **Teste inicial:** backend fake satisfaz `τ`, atinge cap com progresso ou falha.
-- **Aceitação:** trace registra chunks pedidos/usados, `tau_satisfied` e cap.
+- **Estado:** contrato backend-neutral implementado e testado com fake; adapter VLA real permanece no M10.
+- **Teste inicial:** backend fake satisfaz `τ` ou atinge o cap sem inferência extra.
+- **Aceitação:** resultado registra chunks pedidos/usados, `tau_satisfied` e cap;
+  budget esgotado permanece uma razão de término compatível com continuação.
+- **Persistência:** registros por chunk entram no trace incremental do M3.
 
 ### M3 — Trace incremental resistente a crash
 
