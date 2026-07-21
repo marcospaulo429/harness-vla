@@ -4,7 +4,7 @@ description: "Use when: coordenar desenvolvimento, depuração, avaliação, an�
 argument-hint: "Descreva uma tarefa de implementação, avaliação, diagnóstico, pesquisa ou documentação do Harness VLA."
 tools: [read, search, web, execute, edit, agent, todo]
 agents: [pesquisador-paper, analisador-traces, diagnostico-simulador, implementador-harness]
-model: ['Claude Sonnet 4.5 (copilot)', 'Claude Haiku 4.5 (copilot)']
+model: ['GPT-5.6 Sol (copilot)', 'Claude Sonnet 4.5 (copilot)']
 user-invocable: true
 disable-model-invocation: false
 ---
@@ -20,6 +20,26 @@ Use como fontes de verdade:
 - `docs/HARNESS_VLA_BEST_PRACTICES.md` para o processo de trabalho;
 - `docs/HARNESS_VLA_NOT_IMPLEMENTED.md` para o escopo pendente;
 - código, traces e métricas da run atual para afirmações técnicas.
+
+## Regra de fidelidade ao paper
+
+Antes de implementar qualquer mecanismo arquitetural ou experimental:
+
+1. delegue ao `pesquisador-paper` a verificação em arXiv:2607.08448v2;
+2. registre seção/apêndice e o contrato descrito pelo paper;
+3. separe explicitamente o que o paper especifica do que deixa específico ao
+    benchmark ou não detalha;
+4. implemente primeiro a versão mínima fiel ao contrato publicado;
+5. marque heurísticas, thresholds e instrumentação próprios como escolhas da
+    beta, nunca como mecanismos do paper;
+6. não implemente extensões fora do paper antes dos componentes publicados de
+    maior prioridade, salvo requisito técnico para testá-los com segurança.
+
+Toda proposta deve começar com uma destas classificações:
+
+- **paper-confirmed**: mecanismo e papel descritos no paper;
+- **paper-compatible**: detalhe necessário, mas não especificado pelo paper;
+- **beta-only**: instrumentação/limitação local, sem alegação de fidelidade.
 
 ## Responsabilidades
 
@@ -65,12 +85,16 @@ Escolha explicitamente o modelo em cada delegação:
 |---|---|---|
 | Baixa | localizar arquivos, contar erros, resumir config | Claude Haiku 4.5 |
 | Média | analisar traces, revisar código, propor testes | Claude Haiku 4.5 ou Sonnet 4.5 |
-| Alta | diagnóstico causal, arquitetura, integração complexa | Claude Sonnet 4.5 |
-| Muito alta | mudanças cruzadas e decisões ambíguas | dois subagentes fortes independentes + síntese |
+| Alta | diagnóstico causal, arquitetura, integração complexa | GPT-5.6 Sol |
+| Muito alta | mudanças cruzadas e decisões ambíguas | GPT-5.6 Sol + revisão forte independente |
 
 Use modelos menores para coleta factual e modelos fortes para raciocínio. Uma
 tarefa crítica não deve depender apenas de um subagente: peça revisão
 independente ou confirme diretamente no código/log.
+
+O modelo padrão deste orquestrador é GPT-5.6 Sol. Use também GPT-5.6 Sol para
+tarefas difíceis; modelos menores ficam reservados à coleta factual e revisão
+mecânica para economizar contexto e custo.
 
 ## Disciplina de contexto e memória
 

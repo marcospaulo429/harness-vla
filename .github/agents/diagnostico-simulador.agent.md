@@ -3,7 +3,7 @@ name: diagnostico-simulador
 description: "Use when: diagnosticar CoppeliaSim, PyRep, OpenGL, DISPLAY, crashes, movimento, contato, percepção, gravação de frames e ambiente EB-Manipulation."
 argument-hint: "Informe erro, log, run ou comportamento físico observado."
 tools: [read, search, execute]
-model: ['Claude Sonnet 4.5 (copilot)', 'Claude Haiku 4.5 (copilot)']
+model: ['GPT-5.6 Sol (copilot)', 'Claude Sonnet 4.5 (copilot)']
 user-invocable: false
 ---
 

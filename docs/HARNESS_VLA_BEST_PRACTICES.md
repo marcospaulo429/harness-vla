@@ -12,12 +12,26 @@ perder resultados, misturar causas ou sobrecarregar o contexto do orquestrador.
 5. Integre resultados no contexto principal somente após conferir evidências.
 6. Faça um commit pequeno por mudança lógica.
 
+### Gate obrigatório de fidelidade científica
+
+Antes de cada feature, consulte arXiv:2607.08448v2 e registre:
+
+- seção/apêndice que descreve a ideia;
+- contrato que precisa ser preservado;
+- detalhes que o paper não especifica;
+- classificação `paper-confirmed`, `paper-compatible` ou `beta-only`.
+
+Heurísticas locais, thresholds e instrumentação são permitidos para tornar a
+beta testável, mas devem ser descritos como escolhas locais. Não atribua ao
+paper algoritmos ou valores que ele não publicou.
+
 ### Modelos dos subagentes
 
+- orquestrador: GPT-5.6 Sol por padrão;
 - tarefas mecânicas e coleta factual: modelo leve, como Claude Haiku 4.5;
 - revisão e análise moderada: Haiku ou Sonnet;
-- arquitetura, causa-raiz e implementação cruzada: Claude Sonnet 4.5;
-- decisão crítica/ambígua: duas análises fortes independentes.
+- arquitetura, causa-raiz e implementação cruzada: GPT-5.6 Sol;
+- decisão crítica/ambígua: GPT-5.6 Sol com revisão forte independente.
 
 ## 2. Hierarquia de evidência
 
