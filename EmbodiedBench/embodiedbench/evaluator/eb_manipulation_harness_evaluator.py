@@ -117,6 +117,8 @@ class EB_ManipulationHarnessEvaluator:
 
             _, obs = self.env.reset()
             obs_dict = vars(copy.deepcopy(obs))
+            if self.config.get('save_images', False):
+                self.env.save_image(['front_rgb'])
             avg_obj_coord = self._perceive_coords(obs_dict)
             pose = self._current_pose(obs_dict)
             user_instruction = self.env.episode_language_instruction
@@ -166,6 +168,8 @@ class EB_ManipulationHarnessEvaluator:
                 last_feedback = ''
                 for action_single in result.actions[:max(0, remaining)]:
                     obs, reward, done, info = self.env.step(action_single)
+                    if self.config.get('save_images', False):
+                        self.env.save_image(['front_rgb'])
                     last_feedback = info.get('env_feedback', '')
                     step_results.append({
                         'action': list(action_single),
@@ -233,9 +237,11 @@ class EB_ManipulationHarnessEvaluator:
             )
             self.env = EBManEnv(
                 eval_set=self.eval_set,
+                render_mode=self.config.get('render_mode', 'human'),
                 img_size=(self.config['resolution'], self.config['resolution']),
                 down_sample_ratio=self.config['down_sample_ratio'],
                 selected_indexes=list(self.config.get('selected_indexes', []) or []),
+                headless=self.config.get('headless', True),
                 log_path=self.log_path,
             )
             self.env._max_episode_steps = self.max_env_steps

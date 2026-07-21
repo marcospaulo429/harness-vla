@@ -33,14 +33,14 @@ ValidEvalSets = ['base', 'common_sense', 'complex', 'spatial', 'visual']
 class EBManEnv(gym.Env):
     metadata = {'render.modes': ['human', 'rgb_array']}
 
-    def __init__(self, eval_set, render_mode='human', img_size=(500, 500), down_sample_ratio=1.0, log_path = None, selected_indexes=[]):
+    def __init__(self, eval_set, render_mode='human', img_size=(500, 500), down_sample_ratio=1.0, log_path = None, selected_indexes=[], headless=True):
         obs_config = ObservationConfig()
         obs_config.set_all(True)
         obs_config.set_image_size(img_size)
 
         action_mode = ActionMode(ArmActionMode.ABS_EE_POSE_PLAN_WORLD_FRAME)        
         self.env = Environment(
-            action_mode, obs_config=obs_config, headless=True)
+            action_mode, obs_config=obs_config, headless=headless)
         self.env.launch()
         self._render_mode = render_mode
 
