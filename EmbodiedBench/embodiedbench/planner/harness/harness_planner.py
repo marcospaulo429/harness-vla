@@ -164,6 +164,8 @@ class HarnessPlanner:
         object_coords: Dict[str, Sequence[float]],
         pose_action: Sequence[int],
         history: List[Dict],
+        object_roles: Optional[Dict[str, Sequence[str]]] = None,
+        object_labels: Optional[Dict[str, str]] = None,
     ) -> Tuple[Optional[dict], str]:
         """Request one primitive invocation from the model.
 
@@ -173,7 +175,12 @@ class HarnessPlanner:
         """
         self.planner_steps += 1
         turn_prompt = build_turn_prompt(
-            user_instruction, object_coords, pose_action, history
+            user_instruction,
+            object_coords,
+            pose_action,
+            history,
+            object_roles=object_roles,
+            object_labels=object_labels,
         )
         raw_text = self._chat(turn_prompt)
         parsed = extract_json_object(raw_text)

@@ -11,6 +11,7 @@ from embodiedbench.planner.harness.harness_planner import (
     HarnessPlanner,
     extract_json_object,
 )
+from embodiedbench.planner.harness.prompts import build_turn_prompt
 
 
 # ---- GlobalMemory ----------------------------------------------------------
@@ -144,6 +145,35 @@ def test_planner_counts_json_error():
     assert planner.output_json_error == 1
 
 
+def test_planner_accepts_optional_roles_and_labels():
+    planner = _planner('{"action": "release"}')
+    invocation, _ = planner.act(
+        "place the star",
+        {"object 1": [1, 2, 3], "object 2": [4, 5, 6]},
+        [0, 0, 0, 0, 0, 0, 1],
+        [],
+        object_roles={"object 1": ["manipulable"], "object 2": ["destination"]},
+        object_labels={"object 1": "first star", "object 2": "shape sorter"},
+    )
+    assert invocation["action"] == "release"
+
+
+def test_turn_prompt_separates_roles_and_uses_labels_without_color_claims():
+    prompt = build_turn_prompt(
+        "place the star",
+        {"object 1": [1, 2, 3], "object 2": [4, 5, 6]},
+        [0, 0, 0, 0, 0, 0, 1],
+        [],
+        object_roles={"object 1": ["manipulable"], "object 2": ["destination"]},
+        object_labels={"object 1": "first star", "object 2": "shape sorter"},
+    )
+    manipulable, destinations = prompt.split("Destination candidates", 1)
+    assert "object 1: coords=[1, 2, 3], label=first star" in manipulable
+    assert "object 2: coords=[4, 5, 6], label=shape sorter" in destinations
+    assert "distinct" in prompt
+    assert "color" not in prompt.lower()
+
+
 def test_planner_reset():
     planner = _planner("garbage")
     planner.act("x", {}, [0, 0, 0, 0, 0, 0, 1], [])
@@ -156,3 +186,8 @@ def test_system_prompt_contains_primitives():
     planner = _planner("{}")
     assert "vla_act" in planner.system_prompt
     assert "move_to" in planner.system_prompt
+    assert "grasp_verified" in planner.system_prompt
+    assert "NOT proof" in planner.system_prompt
+    assert 'Legacy "target" is NEVER allowed for place' in planner.system_prompt
+    assert "labels, and roles supplied each turn are" in planner.system_prompt
+    assert "authoritative" in planner.system_prompt

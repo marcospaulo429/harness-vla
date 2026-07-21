@@ -203,6 +203,7 @@ class EBManEnv(gym.Env):
         info['episode_elapsed_seconds'] = time.time() - self._episode_start_time
         info['episode_num'] = self._current_episode_num
         info['action'] = discrete_action
+        info['grasped_objects'] = self.get_grasped_object_names()
         if action_success == True:
             info['action_success'] = 1.0
         else:
@@ -216,6 +217,38 @@ class EBManEnv(gym.Env):
         self.episode_log.append(info)
 
         return self.last_frame_obs, reward, terminate, info
+
+    def get_grasped_object_names(self):
+        """Return attached simulator object names, or an empty list if unavailable.
+
+        The defensive lookup keeps lightweight task/environment mocks compatible
+        while using PyRep's public ``get_grasped_objects`` API when exposed.
+        """
+        return self.get_grasp_attachment_evidence()[0]
+
+    def get_grasp_attachment_evidence(self):
+        """Return ``(attached names, available)`` for postcondition checks."""
+        candidates = [
+            getattr(self, 'task', None),
+            getattr(getattr(self, 'task', None), '_robot', None),
+            getattr(getattr(self, 'env', None), '_robot', None),
+        ]
+        robots = list(candidates)
+        robots.extend(getattr(candidate, 'gripper', None) for candidate in candidates)
+        for candidate in robots:
+            getter = getattr(candidate, 'get_grasped_objects', None)
+            if not callable(getter):
+                continue
+            try:
+                names = []
+                for obj in getter() or []:
+                    get_name = getattr(obj, 'get_name', None)
+                    name = get_name() if callable(get_name) else getattr(obj, 'name', None)
+                    names.append(str(name if name is not None else obj))
+                return names, True
+            except Exception:
+                continue
+        return [], False
 
     def close(self) -> None:
         self.env.shutdown()

@@ -357,6 +357,67 @@ def form_object_coord_for_input(obs, task_class, camera_types):
     avg_coord, all_avg_point_list = form_obs_for_input(mask_dict, mask_id_to_real_name, point_cloud_dict)            
     return avg_coord, all_avg_point_list, camera_extrinsics_list, camera_intrinsics_list
 
+
+def form_harness_grounding_for_input(obs, task_class, camera_types):
+    """Return stable IDs, semantic roles, labels, and simulator-name mapping.
+
+    Unlike :func:`form_object_coord_for_input`, IDs are assigned from the task
+    handler's fixed simulator-name order and therefore do not change when an
+    entity moves along the Y axis. Only currently visible entities are included
+    in ``coords``; the other mappings retain the complete known task index.
+    """
+    mask_id_to_sim_name = _get_mask_id_to_name_dict_for_input(obs['object_informations'])
+    point_cloud_dict, _, _ = _get_point_cloud_dict_for_input(obs, camera_types)
+    mask_dict = _get_mask_dict_for_input(obs)
+    task_handler = TASK_HANDLERS[task_class]()
+
+    known_sim_names = list(task_handler.sim_name_to_real_name)
+    sim_name_to_id = {
+        sim_name: f"object {index + 1}"
+        for index, sim_name in enumerate(known_sim_names)
+    }
+    id_to_sim_name = {
+        object_id: sim_name for sim_name, object_id in sim_name_to_id.items()
+    }
+    labels = {
+        sim_name_to_id[sim_name]: label
+        for sim_name, label in task_handler.sim_name_to_real_name.items()
+    }
+    roles = {
+        sim_name_to_id[sim_name]: _harness_roles(task_class, sim_name)
+        for sim_name in known_sim_names
+    }
+
+    coords = {}
+    for mask_id in np.unique(np.concatenate(list(mask_dict.values()), axis=0)):
+        sim_name = mask_id_to_sim_name.get(mask_id)
+        if sim_name not in sim_name_to_id:
+            continue
+        visible_points = []
+        for camera in CAMERAS:
+            mask = mask_dict[camera]
+            if np.any(mask == mask_id):
+                visible_points.append(
+                    np.mean(point_cloud_dict[camera][mask == mask_id].reshape(-1, 3), axis=0)
+                )
+        if visible_points:
+            avg_point = sum(visible_points) / len(visible_points)
+            coords[sim_name_to_id[sim_name]] = list(point_to_voxel_index(avg_point))
+
+    return coords, roles, labels, id_to_sim_name
+
+
+def _harness_roles(task_class, sim_name):
+    if task_class == 'pick':
+        return ['destination'] if sim_name.startswith('small_container') else ['manipulable']
+    if task_class == 'place':
+        return ['destination'] if sim_name == 'shape_sorter_visual' else ['manipulable']
+    if task_class == 'wipe':
+        return ['manipulable'] if sim_name.startswith('sponge') else ['destination']
+    if task_class == 'stack':
+        return ['manipulable', 'destination']
+    return []
+
 class base_task_handler:
     def __init__(self, sim_name_to_real_name):
         self.sim_name_to_real_name = sim_name_to_real_name

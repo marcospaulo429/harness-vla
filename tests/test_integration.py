@@ -40,7 +40,7 @@ def test_full_pick_and_place_loop():
         json.dumps({"reasoning": "stage above cube", "action": {"action": "move_to", "target": "object 1"}}),
         json.dumps({"reasoning": "grasp the cube", "action": {"action": "vla_act", "target": "object 1", "mode": "grasp"}}),
         json.dumps({"reasoning": "transport to destination", "action": {"action": "move_to", "target": "object 2"}}),
-        json.dumps({"reasoning": "place the cube", "action": {"action": "vla_act", "target": "object 2", "mode": "place"}}),
+        json.dumps({"reasoning": "place the cube", "action": {"action": "vla_act", "object": "object 1", "destination": "object 2", "mode": "place"}}),
         json.dumps({"reasoning": "release", "action": {"action": "release", "lift": True}}),
     ]
     planner = HarnessPlanner(model_name="fake", client=_ScriptedClient(script))

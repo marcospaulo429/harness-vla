@@ -28,6 +28,7 @@ Design goals for the beta:
 from __future__ import annotations
 
 import copy
+import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
@@ -77,6 +78,147 @@ DiscreteAction = List[int]
 
 class PrimitiveError(ValueError):
     """Raised when a primitive invocation cannot be compiled to actions."""
+
+
+def classify_grasp_outcome(
+    target_object_id: str,
+    grasped_object_names: Optional[Sequence[str]] = None,
+    object_position_at_close: Optional[Sequence[float]] = None,
+    object_position_after_lift: Optional[Sequence[float]] = None,
+    gripper_position_at_close: Optional[Sequence[float]] = None,
+    gripper_position_after_lift: Optional[Sequence[float]] = None,
+    object_lift_threshold: float = 3.0,
+    max_gripper_object_distance: float = 8.0,
+    empty_object_motion_threshold: float = 1.0,
+    min_gripper_lift: float = 3.0,
+    max_comotion_residual: float = 2.0,
+    target_sim_name: Optional[str] = None,
+) -> Dict:
+    """Classify a grasp without conflating action execution with grasp success.
+
+    Simulator attachment is authoritative when present.  If no attachment is
+    reported, a conservative geometric fallback checks that the target moved up
+    with the lifting gripper.  Missing or ambiguous evidence stays unverified.
+    Positions may be world coordinates or voxels, provided thresholds use the
+    same units.
+    """
+    target = str(target_object_id).strip()
+    target_sim = str(target_sim_name).strip() if target_sim_name is not None else None
+    attached = [str(name).strip() for name in (grasped_object_names or [])]
+    metrics = {
+        "target_object_id": target,
+        "target_sim_name": target_sim,
+        "grasped_object_names": attached,
+        "object_lift": None,
+        "object_displacement": None,
+        "gripper_lift": None,
+        "gripper_object_distance": None,
+        "comotion_residual": None,
+        "geometry_consistent_with_attachment": None,
+        "classification_source": "insufficient_evidence",
+        "reason": "missing_geometric_evidence",
+    }
+
+    def _xyz(value):
+        if value is None or len(value) < 3:
+            return None
+        try:
+            return [float(value[i]) for i in range(3)]
+        except (TypeError, ValueError):
+            return None
+
+    obj_close = _xyz(object_position_at_close)
+    obj_after = _xyz(object_position_after_lift)
+    grip_close = _xyz(gripper_position_at_close)
+    grip_after = _xyz(gripper_position_after_lift)
+    def _distance(a, b):
+        return math.sqrt(sum((a[i] - b[i]) ** 2 for i in range(3)))
+
+    geometry_outcome = None
+    if None not in (obj_close, obj_after, grip_close, grip_after):
+        metrics.update({
+            "object_lift": obj_after[2] - obj_close[2],
+            "object_displacement": _distance(obj_close, obj_after),
+            "gripper_lift": grip_after[2] - grip_close[2],
+            "gripper_object_distance": _distance(grip_after, obj_after),
+            "comotion_residual": _distance(
+                [obj_after[i] - obj_close[i] for i in range(3)],
+                [grip_after[i] - grip_close[i] for i in range(3)],
+            ),
+        })
+        if (
+            metrics["object_lift"] >= object_lift_threshold
+            and metrics["gripper_lift"] >= min_gripper_lift
+            and metrics["gripper_object_distance"] <= max_gripper_object_distance
+            and metrics["comotion_residual"] <= max_comotion_residual
+        ):
+            geometry_outcome = "grasp_verified"
+        elif (
+            metrics["gripper_lift"] >= min_gripper_lift
+            and metrics["object_displacement"] <= empty_object_motion_threshold
+        ):
+            geometry_outcome = "empty_grasp"
+        else:
+            geometry_outcome = "grasp_unverified"
+
+    if attached and target_sim:
+        target_attached = target_sim in attached
+        metrics["classification_source"] = "attachment"
+        if geometry_outcome is not None:
+            metrics["geometry_consistent_with_attachment"] = (
+                (geometry_outcome == "grasp_verified") == target_attached
+            )
+        if target_attached:
+            metrics.update(outcome="grasp_verified", reason="target_attached")
+        else:
+            metrics.update(outcome="grasp_unverified", reason="wrong_object_attached")
+    elif geometry_outcome == "grasp_verified":
+        metrics.update(
+            outcome=geometry_outcome,
+            reason="target_lifted_with_gripper",
+            classification_source="geometry",
+        )
+    elif geometry_outcome == "empty_grasp":
+        metrics.update(
+            outcome=geometry_outcome,
+            reason="gripper_lifted_without_target",
+            classification_source="geometry",
+        )
+    elif geometry_outcome is not None:
+        metrics.update(
+            outcome=geometry_outcome,
+            reason="ambiguous_geometry",
+            classification_source="geometry",
+        )
+    else:
+        metrics["outcome"] = "grasp_unverified"
+    return metrics
+
+
+def primitive_termination(
+    mode: Optional[str],
+    grasp_outcome: Optional[str] = None,
+    env_done: bool = False,
+    release_executed: bool = False,
+    attachment_evidence_available: bool = False,
+    grasped_object_names: Optional[Sequence[str]] = None,
+) -> Tuple[str, bool]:
+    """Return a primitive termination reason and its postcondition status."""
+    if mode == "grasp":
+        if grasp_outcome == "grasp_verified":
+            return "postcondition_met", True
+        if grasp_outcome == "empty_grasp":
+            return "empty_grasp", False
+        return "unverified", False
+    if mode == "place":
+        if env_done and not release_executed:
+            return "environment_terminated_before_release", False
+        if release_executed and attachment_evidence_available:
+            if not list(grasped_object_names or []):
+                return "postcondition_met", True
+            return "unverified", False
+        return "unverified", False
+    return "postcondition_met", True
 
 
 @dataclass
@@ -351,9 +493,21 @@ class PrimitiveLibrary:
         else:
             mode = "grasp"
 
-        target = inv.get("target", inv.get("xyz"))
+        object_id = inv.get("object")
+        destination_id = inv.get("destination")
+        if mode == "grasp":
+            target = object_id if object_id is not None else inv.get("target", inv.get("xyz"))
+        elif mode == "place":
+            if object_id is None or destination_id is None:
+                raise PrimitiveError("place requires both 'object' and 'destination'; legacy 'target' is not allowed")
+            if str(object_id).strip() == str(destination_id).strip():
+                raise PrimitiveError("place object and destination must be different")
+            target = destination_id
+        else:
+            # Legacy target/xyz remains accepted for push (and above for grasp).
+            target = object_id if object_id is not None else inv.get("target", inv.get("xyz"))
         if target is None:
-            raise PrimitiveError("vla_act requires 'target' or 'xyz'")
+            raise PrimitiveError("vla_act requires an object, target, or xyz")
         x, y, z = self.resolve_target(target, object_coords)
         approach_dz = int(inv.get("approach_dz", self.approach_dz))
         lift_dz = int(inv.get("lift_dz", self.lift_dz))
@@ -381,7 +535,12 @@ class PrimitiveLibrary:
             lift.z = _clamp(z + lift_dz, 0, VOXEL_SIZE)
             actions.append(lift.as_action())
             end = lift
-            meta = {"mode": "grasp", "target_voxel": [x, y, z]}
+            meta = {
+                "mode": "grasp",
+                "target_voxel": [x, y, z],
+                "object_id": object_id if object_id is not None else target,
+                "destination_id": None,
+            }
 
         elif mode == "place":
             above = cur.copy()
@@ -399,7 +558,13 @@ class PrimitiveLibrary:
             release.gripper = GRIPPER_OPEN
             actions.append(release.as_action())
             end = release
-            meta = {"mode": "place", "target_voxel": [x, y, z]}
+            meta = {
+                "mode": "place",
+                "target_voxel": [x, y, z],
+                "object_id": object_id,
+                "destination_id": destination_id,
+                "canonical_contract": True,
+            }
 
         else:  # push
             direction = inv.get("direction", [0, 0, 0])
@@ -416,7 +581,13 @@ class PrimitiveLibrary:
             pushed.z = _clamp(z + direction[2], 0, VOXEL_SIZE)
             actions.append(pushed.as_action())
             end = pushed
-            meta = {"mode": "push", "target_voxel": [x, y, z], "direction": direction}
+            meta = {
+                "mode": "push",
+                "target_voxel": [x, y, z],
+                "direction": direction,
+                "object_id": object_id if object_id is not None else target,
+                "destination_id": None,
+            }
 
         return PrimitiveResult("vla_act", actions, end, is_contact=True, meta=meta)
 

@@ -13,7 +13,7 @@ in-process loop for the beta). The prompt is assembled from:
 
 from __future__ import annotations
 
-from typing import Dict, List, Sequence
+from typing import Dict, List, Optional, Sequence
 
 from embodiedbench.planner.harness.primitives import (
     GRIPPER_CLOSED,
@@ -54,10 +54,22 @@ Analytic primitives:
                   {{"action": "release", "lift": true|false(optional)}}
 
 Contact-rich primitive (a retryable frozen-VLA stand-in):
-  vla_act      -> execute a local contact-rich interaction on a target.
-                  {{"action": "vla_act", "target": "object 1", "mode": "grasp"|"place"|"push"}}
+    vla_act grasp -> {{"action": "vla_act", "object": "object 1", "mode": "grasp"}}
+    vla_act place -> {{"action": "vla_act", "object": "object 1", "destination": "object 2", "mode": "place"}}
+                                    The object being held and destination MUST be distinct.
+    legacy grasp/push -> {{"action": "vla_act", "target": "object 1", "mode": "grasp"|"push"}}
+                  Legacy "target" is NEVER allowed for place; place always requires object and destination.
                   For push you may add "direction": [dx, dy, dz].
                   vla_act is retryable: if a grasp comes up empty, re-stage and call it again.
+
+Grounding rule: the visible planner IDs, labels, and roles supplied each turn are
+authoritative. Grasp only a manipulable ID. For place, use a manipulable object
+ID and a distinct destination ID; never infer roles from ID numbering or wording.
+
+Safety rule: call canonical place only after history explicitly reports
+grasp_verified for that same object. action_success means only that a simulator
+command executed; it is NOT proof that an object was grasped. On empty_grasp or
+grasp_unverified, do not place: inspect feedback, re-stage, and retry grasp.
 
 Division of labor: use vla_act for the moment of contact (grasp/place/push);
 use analytic primitives for everything else (staging, transport, release)."""
@@ -84,10 +96,22 @@ def build_system_prompt(global_memory_text: str) -> str:
     )
 
 
-def _format_object_coords(object_coords: Dict[str, Sequence[float]]) -> str:
-    if not object_coords:
-        return "(no objects localized this turn)"
-    return "\n".join(f"  {name}: {list(coord)}" for name, coord in object_coords.items())
+def _format_candidates(
+    object_coords: Dict[str, Sequence[float]],
+    object_roles: Optional[Dict[str, Sequence[str]]],
+    object_labels: Optional[Dict[str, str]],
+    role: str,
+) -> str:
+    roles = object_roles or {}
+    labels = object_labels or {}
+    candidates = []
+    for object_id, coord in object_coords.items():
+        if roles and role not in roles.get(object_id, []):
+            continue
+        label = labels.get(object_id)
+        suffix = f", label={label}" if label else ""
+        candidates.append(f"  {object_id}: coords={list(coord)}{suffix}")
+    return "\n".join(candidates) if candidates else "  (none localized this turn)"
 
 
 def build_turn_prompt(
@@ -96,6 +120,8 @@ def build_turn_prompt(
     pose_action: Sequence[int],
     history: List[Dict],
     max_history: int = 8,
+    object_roles: Optional[Dict[str, Sequence[str]]] = None,
+    object_labels: Optional[Dict[str, str]] = None,
 ) -> str:
     """Assemble the per-turn user message.
 
@@ -108,8 +134,12 @@ def build_turn_prompt(
     lines.append("Current end-effector pose [X, Y, Z, Roll, Pitch, Yaw, Gripper]:")
     lines.append(f"  {list(pose_action)}")
     lines.append("")
-    lines.append("Localized objects (voxel coordinates):")
-    lines.append(_format_object_coords(object_coords))
+    lines.append("Manipulable candidates (planner ID, voxel coords, optional label):")
+    lines.append(_format_candidates(object_coords, object_roles, object_labels, "manipulable"))
+    lines.append("")
+    lines.append("Destination candidates (planner ID, voxel coords, optional label):")
+    lines.append(_format_candidates(object_coords, object_roles, object_labels, "destination"))
+    lines.append("For place, choose a destination ID distinct from the manipulable object ID.")
     lines.append("")
 
     if history:

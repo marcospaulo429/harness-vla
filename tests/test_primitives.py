@@ -9,6 +9,8 @@ from embodiedbench.planner.harness.primitives import (
     PrimitiveError,
     PrimitiveLibrary,
     VOXEL_SIZE,
+    classify_grasp_outcome,
+    primitive_termination,
 )
 
 
@@ -106,22 +108,75 @@ def test_vla_act_grasp_sequence(lib, coords):
     assert lift[2] == 20 + 6 and lift[6] == GRIPPER_CLOSED
 
 
+def test_vla_act_canonical_grasp_uses_object_and_meta(lib, coords):
+    res = lib.compile(
+        {"action": "vla_act", "object": "object 1", "mode": "grasp"},
+        PoseState(),
+        coords,
+    )
+    assert res.meta["object_id"] == "object 1"
+    assert res.meta["destination_id"] is None
+
+
 def test_vla_act_place_sequence(lib, coords):
     pose = PoseState(gripper=GRIPPER_CLOSED)
-    res = lib.compile({"action": "vla_act", "target": "object 2", "mode": "place"}, pose, coords)
+    res = lib.compile(
+        {"action": "vla_act", "object": "object 1", "destination": "object 2", "mode": "place"},
+        pose,
+        coords,
+    )
     assert res.meta["mode"] == "place"
     assert len(res.actions) == 3
     assert res.actions[-1][6] == GRIPPER_OPEN  # release at the end
 
 
-def test_vla_act_prompt_implies_place(lib, coords):
-    pose = PoseState(gripper=GRIPPER_CLOSED)
+def test_vla_act_canonical_place_uses_distinct_destination(lib, coords):
     res = lib.compile(
-        {"action": "vla_act", "target": "object 1", "prompt": "place the cube in the box"},
-        pose,
+        {
+            "action": "vla_act",
+            "object": "object 1",
+            "destination": "object 2",
+            "mode": "place",
+        },
+        PoseState(gripper=GRIPPER_CLOSED),
         coords,
     )
-    assert res.meta["mode"] == "place"
+    assert res.meta["object_id"] == "object 1"
+    assert res.meta["destination_id"] == "object 2"
+    assert res.actions[1][:3] == coords["object 2"]
+
+
+def test_vla_act_canonical_place_rejects_same_object(lib, coords):
+    with pytest.raises(PrimitiveError, match="must be different"):
+        lib.compile(
+            {
+                "action": "vla_act",
+                "object": "object 1",
+                "destination": "object 1",
+                "mode": "place",
+            },
+            PoseState(gripper=GRIPPER_CLOSED),
+            coords,
+        )
+
+
+def test_vla_act_prompt_implies_place(lib, coords):
+    pose = PoseState(gripper=GRIPPER_CLOSED)
+    with pytest.raises(PrimitiveError, match="legacy 'target' is not allowed"):
+        lib.compile(
+            {"action": "vla_act", "target": "object 1", "prompt": "place the cube in the box"},
+            pose,
+            coords,
+        )
+
+
+def test_vla_act_legacy_place_target_is_never_accepted(lib, coords):
+    with pytest.raises(PrimitiveError, match="requires both 'object' and 'destination'"):
+        lib.compile(
+            {"action": "vla_act", "target": "object 2", "mode": "place"},
+            PoseState(gripper=GRIPPER_CLOSED),
+            coords,
+        )
 
 
 def test_vla_act_push(lib, coords):
@@ -162,3 +217,116 @@ def test_actions_are_plain_ints(lib, coords):
     for action in res.actions:
         assert all(isinstance(v, int) for v in action)
         assert len(action) == 7
+
+
+def test_classify_grasp_attachment_target_has_priority():
+    result = classify_grasp_outcome(
+        "object 1", ["cube_basic0"], [0, 0, 0], [0, 0, 0], [0, 0, 0], [50, 50, 50],
+        target_sim_name="cube_basic0",
+    )
+    assert result["outcome"] == "grasp_verified"
+    assert result["classification_source"] == "attachment"
+    assert result["object_lift"] == 0
+    assert result["gripper_lift"] == 50
+    assert result["geometry_consistent_with_attachment"] is False
+
+
+def test_classify_grasp_attachment_keeps_consistent_geometry_metrics():
+    result = classify_grasp_outcome(
+        "object 1", ["cube_basic0"], [10, 10, 10], [10, 10, 16],
+        [10, 10, 10], [10, 10, 16], target_sim_name="cube_basic0",
+    )
+    assert result["outcome"] == "grasp_verified"
+    assert result["classification_source"] == "attachment"
+    assert result["object_lift"] == 6
+    assert result["comotion_residual"] == 0
+    assert result["geometry_consistent_with_attachment"] is True
+
+
+def test_classify_grasp_wrong_attachment():
+    result = classify_grasp_outcome(
+        "object 1", ["cube_basic1"], target_sim_name="cube_basic0"
+    )
+    assert result["outcome"] == "grasp_unverified"
+    assert result["reason"] == "wrong_object_attached"
+
+
+def test_classify_grasp_attachment_matches_sim_name_mapping():
+    result = classify_grasp_outcome(
+        "object 7", ["cube_basic0"], target_sim_name="cube_basic0"
+    )
+    assert result["outcome"] == "grasp_verified"
+    assert result["classification_source"] == "attachment"
+
+
+def test_unmapped_attachment_falls_back_to_geometry():
+    result = classify_grasp_outcome(
+        "object 1", ["cube_basic0"], [10, 10, 10], [10, 10, 16],
+        [10, 10, 10], [10, 10, 16],
+    )
+    assert result["outcome"] == "grasp_verified"
+    assert result["classification_source"] == "geometry"
+
+
+def test_geometry_rejects_large_comotion_residual():
+    result = classify_grasp_outcome(
+        "object 1", [], [10, 10, 10], [15, 10, 16],
+        [10, 10, 10], [10, 10, 16], max_comotion_residual=2.0,
+    )
+    assert result["outcome"] == "grasp_unverified"
+    assert result["comotion_residual"] == 5
+
+
+def test_classify_grasp_geometry_verified():
+    result = classify_grasp_outcome(
+        "object 1", [], [10, 10, 10], [10, 10, 16], [10, 10, 10], [10, 10, 16]
+    )
+    assert result["outcome"] == "grasp_verified"
+    assert result["object_lift"] == 6
+
+
+def test_classify_empty_grasp_geometry():
+    result = classify_grasp_outcome(
+        "object 1", [], [10, 10, 10], [10, 10, 10], [10, 10, 10], [10, 10, 16]
+    )
+    assert result["outcome"] == "empty_grasp"
+
+
+def test_classify_grasp_missing_evidence_is_unverified():
+    result = classify_grasp_outcome("object 1")
+    assert result["outcome"] == "grasp_unverified"
+    assert result["geometry_consistent_with_attachment"] is None
+
+
+@pytest.mark.parametrize(
+    "outcome, expected",
+    [
+        ("grasp_verified", ("postcondition_met", True)),
+        ("empty_grasp", ("empty_grasp", False)),
+        ("grasp_unverified", ("unverified", False)),
+    ],
+)
+def test_grasp_termination_follows_outcome(outcome, expected):
+    assert primitive_termination("grasp", grasp_outcome=outcome) == expected
+
+
+def test_place_terminated_before_release_fails_postcondition():
+    assert primitive_termination(
+        "place", env_done=True, release_executed=False,
+    ) == ("environment_terminated_before_release", False)
+
+
+def test_place_release_with_attachment_api_proves_postcondition():
+    assert primitive_termination(
+        "place",
+        env_done=True,
+        release_executed=True,
+        attachment_evidence_available=True,
+        grasped_object_names=[],
+    ) == ("postcondition_met", True)
+
+
+def test_place_release_without_attachment_api_is_unverified():
+    assert primitive_termination(
+        "place", release_executed=True, attachment_evidence_available=False,
+    ) == ("unverified", False)
