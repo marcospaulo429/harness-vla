@@ -10,7 +10,9 @@ from embodiedbench.planner.harness.primitives import (
     PrimitiveLibrary,
     VOXEL_SIZE,
     classify_grasp_outcome,
+    classify_spatial_postcondition,
     primitive_termination,
+    summarize_physical_state,
 )
 
 
@@ -298,6 +300,55 @@ def test_classify_grasp_missing_evidence_is_unverified():
     assert result["geometry_consistent_with_attachment"] is None
 
 
+def test_spatial_postcondition_reports_distance_and_tolerance():
+    result = classify_spatial_postcondition([10, 10, 10], [11, 12, 10], 3.0)
+    assert result["postcondition_met"] is True
+    assert result["distance"] == pytest.approx(5 ** 0.5)
+    assert result["reason"] == "within_tolerance"
+
+
+def test_spatial_postcondition_rejects_distant_or_missing_observation():
+    distant = classify_spatial_postcondition([10, 10, 10], [20, 10, 10], 2.0)
+    missing = classify_spatial_postcondition([10, 10, 10], None, 2.0)
+    assert distant["postcondition_met"] is False
+    assert distant["reason"] == "outside_tolerance"
+    assert missing["postcondition_met"] is None
+    assert missing["reason"] == "missing_spatial_evidence"
+
+
+@pytest.mark.parametrize(
+    "spatial_met, expected",
+    [
+        (True, ("postcondition_met", True)),
+        (False, ("target_pose_not_reached", False)),
+        (None, ("unverified", False)),
+    ],
+)
+def test_move_to_termination_requires_spatial_postcondition(spatial_met, expected):
+    assert primitive_termination(
+        None,
+        primitive_name="move_to",
+        spatial_postcondition_met=spatial_met,
+    ) == expected
+
+
+def test_physical_state_tracks_only_verified_manipulable_objects():
+    state = summarize_physical_state(
+        {
+            "object 1": ["manipulable"],
+            "object 2": ["manipulable"],
+            "object 3": ["destination"],
+        },
+        held_object_id="object 2",
+        placed_object_ids=["object 1", "object 3"],
+    )
+    assert state == {
+        "held": "object 2",
+        "placed": ["object 1"],
+        "remaining": [],
+    }
+
+
 @pytest.mark.parametrize(
     "outcome, expected",
     [
@@ -323,10 +374,38 @@ def test_place_release_with_attachment_api_proves_postcondition():
         release_executed=True,
         attachment_evidence_available=True,
         grasped_object_names=[],
+        spatial_postcondition_met=True,
     ) == ("postcondition_met", True)
+
+
+def test_place_release_outside_destination_fails_postcondition():
+    assert primitive_termination(
+        "place",
+        release_executed=True,
+        attachment_evidence_available=True,
+        grasped_object_names=[],
+        spatial_postcondition_met=False,
+    ) == ("released_outside_destination_tolerance", False)
 
 
 def test_place_release_without_attachment_api_is_unverified():
     assert primitive_termination(
         "place", release_executed=True, attachment_evidence_available=False,
+    ) == ("unverified", False)
+
+
+def test_release_requires_confirmed_detachment():
+    assert primitive_termination(
+        None,
+        primitive_name="release",
+        release_executed=True,
+        attachment_evidence_available=True,
+        grasped_object_names=[],
+    ) == ("postcondition_met", True)
+    assert primitive_termination(
+        None,
+        primitive_name="release",
+        release_executed=True,
+        attachment_evidence_available=True,
+        grasped_object_names=["cube_basic0"],
     ) == ("unverified", False)

@@ -38,6 +38,8 @@ config = {
     'max_env_steps': 30,
     'approach_dz': 8,
     'lift_dz': 6,
+    'move_to_tolerance': 2.0,
+    'place_tolerance': 12.0,
     'global_memory_path': '',
     'headless': True,
     'render_mode': 'rgb_array',

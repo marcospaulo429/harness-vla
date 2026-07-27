@@ -20,6 +20,8 @@ max_turns: 12            # planner primitive invocations per episode
 max_env_steps: 30        # env steps per episode (vla_act consumes several)
 approach_dz: 8           # staging height above a target (voxels)
 lift_dz: 6               # post-grasp lift (voxels)
+move_to_tolerance: 2.0   # beta-only end-effector postcondition (voxels)
+place_tolerance: 12.0    # beta-only object-to-destination postcondition (voxels)
 
 # Global Memory
 global_memory_path: ''   # empty = use the fixed manual seed

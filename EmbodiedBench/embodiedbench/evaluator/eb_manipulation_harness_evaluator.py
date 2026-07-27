@@ -40,8 +40,10 @@ from embodiedbench.planner.harness.primitives import (
     PrimitiveError,
     PrimitiveLibrary,
     classify_grasp_outcome,
+    classify_spatial_postcondition,
     pose_from_observation,
     primitive_termination,
+    summarize_physical_state,
 )
 from embodiedbench.main import logger
 
@@ -70,6 +72,9 @@ class EB_ManipulationHarnessEvaluator:
             'min_gripper_lift': config.get('grasp_min_gripper_lift', 3.0),
             'max_comotion_residual': config.get('grasp_max_comotion_residual', 2.0),
         }
+        # Beta-only tolerances in the environment's 100^3 voxel grid.
+        self.move_to_tolerance = float(config.get('move_to_tolerance', 2.0))
+        self.place_tolerance = float(config.get('place_tolerance', 12.0))
 
     # -- persistence ------------------------------------------------------
 
@@ -96,6 +101,8 @@ class EB_ManipulationHarnessEvaluator:
         grounding_observations = 0
         grounding_weighted_error = 0.0
         grounding_max_error = None
+        postconditions_met, postconditions_failed = 0, 0
+        termination_reasons = {}
         for file_name in sorted(os.listdir(folder_path)):
             if file_name.endswith(".json") and file_name.startswith("episode"):
                 with open(os.path.join(folder_path, file_name), 'r', encoding='utf-8') as jf:
@@ -108,6 +115,10 @@ class EB_ManipulationHarnessEvaluator:
                 semantic_rejects += data.get("semantic_rejects", 0)
                 no_progress_rejected += data.get("no_progress_rejected", 0)
                 grounding = data.get('grounding_metrics', {})
+                postconditions_met += data.get('primitive_postconditions_met', 0)
+                postconditions_failed += data.get('primitive_postconditions_failed', 0)
+                for reason, count in data.get('termination_reasons', {}).items():
+                    termination_reasons[reason] = termination_reasons.get(reason, 0) + count
                 object_count = grounding.get('object_observation_count', 0)
                 mean_error = grounding.get('mean_error_m')
                 if object_count and mean_error is not None:
@@ -135,6 +146,9 @@ class EB_ManipulationHarnessEvaluator:
                 if grounding_observations else None
             ),
             'grounding_max_surface_to_origin_error_m': grounding_max_error,
+            'primitive_postconditions_met': postconditions_met,
+            'primitive_postconditions_failed': postconditions_failed,
+            'termination_reasons': termination_reasons,
         }
         with open(os.path.join(folder_path, filename), 'w', encoding='utf-8') as f:
             json.dump(task_log, f, ensure_ascii=False)
@@ -235,6 +249,9 @@ class EB_ManipulationHarnessEvaluator:
             episode_info = {
                 'reward': [], 'action_success': [],
                 'semantic_rejects': 0, 'no_progress_rejected': 0,
+                'primitive_postconditions_met': 0,
+                'primitive_postconditions_failed': 0,
+                'termination_reasons': {},
             }
             trace = []
             grounding_frames = []
@@ -257,6 +274,7 @@ class EB_ManipulationHarnessEvaluator:
             self.planner.reset()
             history = []
             held_object_id = None
+            placed_object_ids = set()
             no_progress_guard = NoProgressGuard(limit=3)
             done = False
             info = {'task_success': 0, 'episode_elapsed_seconds': 0}
@@ -405,7 +423,7 @@ class EB_ManipulationHarnessEvaluator:
                 feedback = last_feedback or 'no environment feedback'
                 grasp_outcome = None
                 release_executed = bool(
-                    mode == 'place'
+                    (mode == 'place' or result.name == 'release')
                     and any(step['action'][6] == 1 for step in step_results)
                 )
                 if mode == 'grasp':
@@ -424,11 +442,25 @@ class EB_ManipulationHarnessEvaluator:
                     )
                     if grasp_outcome['outcome'] == 'grasp_verified':
                         held_object_id = object_id
+                        placed_object_ids.discard(object_id)
                     else:
                         held_object_id = None
                     feedback = (
                         f"Grasp outcome: {grasp_outcome['outcome']} "
                         f"({grasp_outcome['reason']}). action execution: {execution_status}."
+                    )
+                spatial_postcondition = None
+                if result.name == 'move_to':
+                    spatial_postcondition = classify_spatial_postcondition(
+                        result.end_pose.as_action()[:3],
+                        pose.as_action()[:3],
+                        self.move_to_tolerance,
+                    )
+                elif mode == 'place':
+                    spatial_postcondition = classify_spatial_postcondition(
+                        avg_obj_coord.get(result.meta.get('destination_id')),
+                        avg_obj_coord.get(object_id),
+                        self.place_tolerance,
                     )
                 termination_reason, primitive_postcondition_met = primitive_termination(
                     mode=mode,
@@ -439,9 +471,47 @@ class EB_ManipulationHarnessEvaluator:
                     grasped_object_names=(
                         step_results[-1]['grasped_objects'] if step_results else []
                     ),
+                    primitive_name=result.name,
+                    spatial_postcondition_met=(
+                        spatial_postcondition['postcondition_met']
+                        if spatial_postcondition else None
+                    ),
                 )
                 if mode == 'place' and primitive_postcondition_met:
+                    placed_object_ids.add(object_id)
+                detached = bool(
+                    release_executed
+                    and attachment_evidence_available
+                    and not (step_results[-1]['grasped_objects'] if step_results else [])
+                )
+                if detached:
                     held_object_id = None
+                if spatial_postcondition is not None:
+                    distance = spatial_postcondition['distance']
+                    distance_text = 'unknown' if distance is None else f'{distance:.3f}'
+                    feedback = (
+                        f"{result.name} postcondition: {termination_reason}; "
+                        f"spatial={spatial_postcondition['reason']} "
+                        f"(distance={distance_text}, tolerance="
+                        f"{spatial_postcondition['tolerance']:.3f} voxels). "
+                        f"action execution: {execution_status}."
+                    )
+                elif result.name == 'release':
+                    feedback = (
+                        f"Release outcome: {termination_reason}; detached={detached}. "
+                        f"action execution: {execution_status}."
+                    )
+                physical_state = summarize_physical_state(
+                    object_roles, held_object_id, placed_object_ids
+                )
+                episode_info[
+                    'primitive_postconditions_met'
+                    if primitive_postcondition_met
+                    else 'primitive_postconditions_failed'
+                ] += 1
+                episode_info['termination_reasons'][termination_reason] = (
+                    episode_info['termination_reasons'].get(termination_reason, 0) + 1
+                )
                 no_progress_guard.observe_execution(invocation, step_results)
                 record.update({
                     'primitive': result.name,
@@ -451,12 +521,18 @@ class EB_ManipulationHarnessEvaluator:
                     'step_results': step_results,
                     'pose_after': pose.as_action(),
                     'execution_status': execution_status,
-                    'status': grasp_outcome['outcome'] if grasp_outcome else execution_status,
+                    'status': (
+                        grasp_outcome['outcome'] if grasp_outcome
+                        else 'postcondition_met' if primitive_postcondition_met
+                        else termination_reason
+                    ),
                     'feedback': feedback,
                     'held_object_id': held_object_id,
                     'env_done': bool(done),
                     'termination_reason': termination_reason,
                     'primitive_postcondition_met': primitive_postcondition_met,
+                    'spatial_postcondition': spatial_postcondition,
+                    'physical_state': physical_state,
                 })
                 if grasp_outcome:
                     record['grasp_evidence'] = {
@@ -483,6 +559,9 @@ class EB_ManipulationHarnessEvaluator:
             episode_info['episode_elapsed_seconds'] = info.get('episode_elapsed_seconds', 0)
             episode_info['grounding_metrics'] = summarize_oracle_frames(
                 grounding_frames
+            )
+            episode_info['physical_state_final'] = summarize_physical_state(
+                object_roles, held_object_id, placed_object_ids
             )
             self.save_episode_metric(episode_info)
             self.save_trace(trace)

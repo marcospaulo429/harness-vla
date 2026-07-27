@@ -103,7 +103,23 @@ valida geometria e instrumentacao, mas ainda nao e percepcao visual independente
 
 ## Etapa 2 - Pos-condicoes e estado fisico uniforme
 
-**Classificacao:** paper-confirmed; tolerancias sao paper-compatible.
+**Classificacao:** paper-compatible enquanto a fonte primaria indicada como
+`arXiv:2607.08448v2` nao puder ser resolvida externamente; os documentos locais
+atribuem o mecanismo ao paper, mas isso nao substitui verificacao primaria.
+Tolerancias numericas e transformacao de sinais PyRep em estado estruturado sao
+beta-only.
+
+**Hipotese:** `action_success` esconde divergencias fisicas que podem ser
+detectadas por pose final, attachment e grounding RGB-D, sem mudar a trajetoria
+nem consultar oracle.
+
+**Criterio de falsificacao:** a etapa falha se os traces nao distinguirem
+movimento aceito de pose nao alcancada, ou se grasp/release/place forem marcados
+como verificados sem a evidencia exigida.
+
+**Thresholds beta:** `move_to_tolerance=2.0` voxels e
+`place_tolerance=12.0` voxels. Estes valores instrumentam a beta e nao sao
+atribuidos ao paper.
 
 Entregas:
 

@@ -195,6 +195,62 @@ def classify_grasp_outcome(
     return metrics
 
 
+def classify_spatial_postcondition(
+    expected_position: Optional[Sequence[float]],
+    observed_position: Optional[Sequence[float]],
+    tolerance: float,
+) -> Dict:
+    """Classify whether an observed position reaches an expected position."""
+    result = {
+        "expected_position": list(expected_position) if expected_position is not None else None,
+        "observed_position": list(observed_position) if observed_position is not None else None,
+        "tolerance": float(tolerance),
+        "distance": None,
+        "postcondition_met": None,
+        "reason": "missing_spatial_evidence",
+    }
+    if tolerance < 0:
+        raise ValueError("tolerance must be non-negative")
+    if expected_position is None or observed_position is None:
+        return result
+    if len(expected_position) < 3 or len(observed_position) < 3:
+        return result
+    try:
+        distance = math.sqrt(sum(
+            (float(observed_position[index]) - float(expected_position[index])) ** 2
+            for index in range(3)
+        ))
+    except (TypeError, ValueError):
+        return result
+    result["distance"] = distance
+    result["postcondition_met"] = distance <= tolerance
+    result["reason"] = "within_tolerance" if result["postcondition_met"] else "outside_tolerance"
+    return result
+
+
+def summarize_physical_state(
+    object_roles: Dict[str, Sequence[str]],
+    held_object_id: Optional[str],
+    placed_object_ids: Sequence[str],
+) -> Dict:
+    """Return deterministic held, placed, and remaining manipulable IDs."""
+    manipulable = {
+        object_id
+        for object_id, roles in object_roles.items()
+        if "manipulable" in roles
+    }
+    placed = set(placed_object_ids) & manipulable
+    held = held_object_id if held_object_id in manipulable else None
+    remaining = manipulable - placed
+    if held is not None:
+        remaining.discard(held)
+    return {
+        "held": held,
+        "placed": sorted(placed),
+        "remaining": sorted(remaining),
+    }
+
+
 def primitive_termination(
     mode: Optional[str],
     grasp_outcome: Optional[str] = None,
@@ -202,8 +258,24 @@ def primitive_termination(
     release_executed: bool = False,
     attachment_evidence_available: bool = False,
     grasped_object_names: Optional[Sequence[str]] = None,
+    primitive_name: Optional[str] = None,
+    spatial_postcondition_met: Optional[bool] = None,
 ) -> Tuple[str, bool]:
     """Return a primitive termination reason and its postcondition status."""
+    if primitive_name == "move_to":
+        if spatial_postcondition_met is True:
+            return "postcondition_met", True
+        if spatial_postcondition_met is False:
+            return "target_pose_not_reached", False
+        return "unverified", False
+    if primitive_name == "release":
+        if env_done and not release_executed:
+            return "environment_terminated_before_release", False
+        if release_executed and attachment_evidence_available:
+            if not list(grasped_object_names or []):
+                return "postcondition_met", True
+            return "unverified", False
+        return "unverified", False
     if mode == "grasp":
         if grasp_outcome == "grasp_verified":
             return "postcondition_met", True
@@ -214,9 +286,12 @@ def primitive_termination(
         if env_done and not release_executed:
             return "environment_terminated_before_release", False
         if release_executed and attachment_evidence_available:
-            if not list(grasped_object_names or []):
+            if list(grasped_object_names or []):
+                return "unverified", False
+            if spatial_postcondition_met is True:
                 return "postcondition_met", True
-            return "unverified", False
+            if spatial_postcondition_met is False:
+                return "released_outside_destination_tolerance", False
         return "unverified", False
     return "postcondition_met", True
 
