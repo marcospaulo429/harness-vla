@@ -36,6 +36,18 @@ def write_json_atomic(path, payload):
     os.replace(temporary_path, output_path)
 
 
+def write_text_atomic(path, payload):
+    """Replace a text file atomically after flushing its complete payload."""
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = output_path.with_name(output_path.name + ".tmp")
+    with temporary_path.open("w", encoding="utf-8") as output_file:
+        output_file.write(payload)
+        output_file.flush()
+        os.fsync(output_file.fileno())
+    os.replace(temporary_path, output_path)
+
+
 def resolve_git_commit(start_path):
     """Resolve HEAD without requiring the git executable in the runtime."""
     current = Path(start_path).resolve()
