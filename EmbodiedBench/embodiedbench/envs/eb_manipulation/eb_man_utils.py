@@ -5,6 +5,14 @@ from pyrep.objects import VisionSensor
 import cv2
 from scipy.spatial.transform import Rotation
 
+from embodiedbench.envs.eb_manipulation.rgbd_grounding import (
+    calibration_from_observation,
+    depth_to_meters,
+    make_provenance,
+    representative_mask_pixel,
+    validate_rgbd_shapes,
+)
+
 SCENE_BOUNDS = np.array([-0.3, -0.5, 0.6, 0.7, 0.5, 1.6])
 ROTATION_RESOLUTION = 3
 VOXEL_SIZE = 100
@@ -358,13 +366,12 @@ def form_object_coord_for_input(obs, task_class, camera_types):
     return avg_coord, all_avg_point_list, camera_extrinsics_list, camera_intrinsics_list
 
 
-def form_harness_grounding_for_input(obs, task_class, camera_types):
-    """Return stable IDs, semantic roles, labels, and simulator-name mapping.
+def form_harness_grounding_artifact_for_input(obs, task_class, camera_types):
+    """Build stable planner coordinates plus auditable RGB-D provenance.
 
-    Unlike :func:`form_object_coord_for_input`, IDs are assigned from the task
-    handler's fixed simulator-name order and therefore do not change when an
-    entity moves along the Y axis. Only currently visible entities are included
-    in ``coords``; the other mappings retain the complete known task index.
+    Simulator masks are used only as a transitional pixel-to-object association
+    and are declared as privileged in every sample. Object poses and bounding
+    boxes are not used to estimate coordinates.
     """
     mask_id_to_sim_name = _get_mask_id_to_name_dict_for_input(obs['object_informations'])
     point_cloud_dict, _, _ = _get_point_cloud_dict_for_input(obs, camera_types)
@@ -388,23 +395,84 @@ def form_harness_grounding_for_input(obs, task_class, camera_types):
         for sim_name in known_sim_names
     }
 
+    frame_id = int(obs.get('misc', {}).get('rgbd_frame_id', 0))
     coords = {}
+    objects = {}
     for mask_id in np.unique(np.concatenate(list(mask_dict.values()), axis=0)):
         sim_name = mask_id_to_sim_name.get(mask_id)
         if sim_name not in sim_name_to_id:
             continue
         visible_points = []
+        samples = []
         for camera in CAMERAS:
             mask = mask_dict[camera]
-            if np.any(mask == mask_id):
-                visible_points.append(
-                    np.mean(point_cloud_dict[camera][mask == mask_id].reshape(-1, 3), axis=0)
-                )
-        if visible_points:
-            avg_point = sum(visible_points) / len(visible_points)
-            coords[sim_name_to_id[sim_name]] = list(point_to_voxel_index(avg_point))
+            matching_pixels = np.argwhere(mask == mask_id)
+            if not matching_pixels.size:
+                continue
+            camera_points = point_cloud_dict[camera][mask == mask_id].reshape(-1, 3)
+            valid_points = camera_points[np.all(np.isfinite(camera_points), axis=1)]
+            if not len(valid_points):
+                continue
+            visible_points.append(np.mean(valid_points, axis=0))
 
-    return coords, roles, labels, id_to_sim_name
+            calibration = calibration_from_observation(obs, camera, frame_id)
+            metric_depth = depth_to_meters(
+                obs[f'{camera}_depth'], calibration.near, calibration.far,
+                calibration.depth_in_meters,
+            )
+            validate_rgbd_shapes(obs[f'{camera}_rgb'], metric_depth)
+            row, column = representative_mask_pixel(matching_pixels)
+            provenance = make_provenance(
+                calibration, [column, row], metric_depth[row, column]
+            )
+            provenance.update({
+                'rgb_shape': list(np.asarray(obs[f'{camera}_rgb']).shape),
+                'depth_shape': list(metric_depth.shape),
+                'visible_pixel_count': int(len(matching_pixels)),
+                'valid_point_count': int(len(valid_points)),
+            })
+            samples.append(provenance)
+
+        if visible_points:
+            avg_point = np.mean(visible_points, axis=0)
+            object_id = sim_name_to_id[sim_name]
+            voxel = list(point_to_voxel_index(avg_point))
+            coords[object_id] = voxel
+            objects[object_id] = {
+                'sim_name': sim_name,
+                'label': labels[object_id],
+                'world_xyz': [float(value) for value in avg_point],
+                'voxel_xyz': [int(value) for value in voxel],
+                'samples': samples,
+            }
+
+    return {
+        'frame_id': frame_id,
+        'capture_mode': obs.get('misc', {}).get(
+            'rgbd_capture_mode', 'legacy_observation'
+        ),
+        'coordinate_source': 'rgbd_sim_mask',
+        'planner_coords': coords,
+        'roles': roles,
+        'labels': labels,
+        'id_to_sim_name': id_to_sim_name,
+        'objects': objects,
+    }
+
+
+def form_harness_grounding_for_input(obs, task_class, camera_types):
+    """Return stable IDs, semantic roles, labels, and simulator-name mapping.
+
+    Unlike :func:`form_object_coord_for_input`, IDs are assigned from the task
+    handler's fixed simulator-name order and therefore do not change when an
+    entity moves along the Y axis. Only currently visible entities are included
+    in ``coords``; the other mappings retain the complete known task index.
+    """
+    artifact = form_harness_grounding_artifact_for_input(obs, task_class, camera_types)
+    return (
+        artifact['planner_coords'], artifact['roles'], artifact['labels'],
+        artifact['id_to_sim_name'],
+    )
 
 
 def _harness_roles(task_class, sim_name):

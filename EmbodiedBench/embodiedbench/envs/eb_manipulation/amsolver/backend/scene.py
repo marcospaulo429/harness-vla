@@ -74,6 +74,7 @@ class Scene(object):
 
         self.target_workspace_check = Dummy.create()
         self._step_callback = None
+        self._observation_frame_id = 0
 
         self._robot_shapes = self._robot.arm.get_objects_in_tree(
             object_type=ObjectType.SHAPE)
@@ -176,6 +177,7 @@ class Scene(object):
             self.distractors = []
 
     def get_observation(self) -> Observation:
+        self._observation_frame_id += 1
         tip = self._robot.arm.get_tip()
 
         joint_forces = None
@@ -314,6 +316,10 @@ class Scene(object):
                 self._obs_config.task_low_dim_state else None),
             misc=self._get_misc(),
             object_informations = self._active_task.objects_information())
+        obs.misc.update({
+            'rgbd_frame_id': self._observation_frame_id,
+            'rgbd_capture_mode': 'explicit_render_no_sim_step',
+        })
         obs = self._active_task.decorate_observation(obs)
         return obs
 
@@ -549,4 +555,13 @@ class Scene(object):
         misc.update(_get_cam_data(self._cam_overhead, 'overhead_camera'))
         misc.update(_get_cam_data(self._cam_front, 'front_camera'))
         misc.update(_get_cam_data(self._cam_wrist, 'wrist_camera'))
+        camera_configs = {
+            'left_shoulder': self._obs_config.left_shoulder_camera,
+            'right_shoulder': self._obs_config.right_shoulder_camera,
+            'overhead': self._obs_config.overhead_camera,
+            'front': self._obs_config.front_camera,
+            'wrist': self._obs_config.wrist_camera,
+        }
+        for name, config in camera_configs.items():
+            misc[f'{name}_camera_depth_in_meters'] = bool(config.depth_in_meters)
         return misc

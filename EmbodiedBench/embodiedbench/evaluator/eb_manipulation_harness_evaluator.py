@@ -18,10 +18,17 @@ import copy
 import json
 
 import numpy as np
+from PIL import Image, ImageDraw
 from tqdm import tqdm
 
 from embodiedbench.envs.eb_manipulation.EBManEnv import EBManEnv, ValidEvalSets
-from embodiedbench.envs.eb_manipulation.eb_man_utils import form_harness_grounding_for_input
+from embodiedbench.envs.eb_manipulation.eb_man_utils import (
+    form_harness_grounding_artifact_for_input,
+)
+from embodiedbench.envs.eb_manipulation.rgbd_grounding import (
+    compute_oracle_metrics,
+    summarize_oracle_frames,
+)
 from embodiedbench.planner.harness.global_memory import GlobalMemory
 from embodiedbench.planner.harness.harness_planner import HarnessPlanner
 from embodiedbench.planner.harness.evaluation_guards import (
@@ -86,6 +93,9 @@ class EB_ManipulationHarnessEvaluator:
         folder_path = self._results_dir()
         total, success, planner_steps, output_error = 0, 0, 0, 0
         semantic_rejects, no_progress_rejected = 0, 0
+        grounding_observations = 0
+        grounding_weighted_error = 0.0
+        grounding_max_error = None
         for file_name in sorted(os.listdir(folder_path)):
             if file_name.endswith(".json") and file_name.startswith("episode"):
                 with open(os.path.join(folder_path, file_name), 'r', encoding='utf-8') as jf:
@@ -97,6 +107,18 @@ class EB_ManipulationHarnessEvaluator:
                 planner_steps += data.get("planner_steps", 0)
                 semantic_rejects += data.get("semantic_rejects", 0)
                 no_progress_rejected += data.get("no_progress_rejected", 0)
+                grounding = data.get('grounding_metrics', {})
+                object_count = grounding.get('object_observation_count', 0)
+                mean_error = grounding.get('mean_error_m')
+                if object_count and mean_error is not None:
+                    grounding_observations += object_count
+                    grounding_weighted_error += object_count * mean_error
+                episode_max = grounding.get('max_error_m')
+                if episode_max is not None:
+                    grounding_max_error = (
+                        episode_max if grounding_max_error is None
+                        else max(grounding_max_error, episode_max)
+                    )
                 total += 1
         task_log = {
             'save_path': self.log_path,
@@ -107,6 +129,12 @@ class EB_ManipulationHarnessEvaluator:
             'output_format_error': output_error,
             'semantic_rejects': semantic_rejects,
             'no_progress_rejected': no_progress_rejected,
+            'grounding_object_observation_count': grounding_observations,
+            'grounding_mean_surface_to_origin_error_m': (
+                grounding_weighted_error / grounding_observations
+                if grounding_observations else None
+            ),
+            'grounding_max_surface_to_origin_error_m': grounding_max_error,
         }
         with open(os.path.join(folder_path, filename), 'w', encoding='utf-8') as f:
             json.dump(task_log, f, ensure_ascii=False)
@@ -114,11 +142,53 @@ class EB_ManipulationHarnessEvaluator:
     # -- perception helpers ----------------------------------------------
 
     def _perceive_grounding(self, obs):
-        coords, roles, labels, id_to_sim_name = form_harness_grounding_for_input(
+        artifact = form_harness_grounding_artifact_for_input(
             copy.deepcopy(obs), self.env.task_class, ['front_rgb']
         )
-        coords = {k: [int(round(v)) for v in coord] for k, coord in coords.items()}
-        return coords, roles, labels, id_to_sim_name
+        artifact['planner_coords'] = {
+            key: [int(round(value)) for value in coord]
+            for key, coord in artifact['planner_coords'].items()
+        }
+        metrics = compute_oracle_metrics(
+            artifact, obs.get('object_informations', {})
+        )
+        return artifact, metrics
+
+    def _save_grounding_audit(self, obs, artifact, metrics):
+        if not self.config.get('save_grounding_audit', True):
+            return None
+        episode_dir = os.path.join(
+            self.env.log_path, 'grounding',
+            f'episode_{self.env._current_episode_num}',
+        )
+        os.makedirs(episode_dir, exist_ok=True)
+        frame_id = artifact['frame_id']
+        sidecar_path = os.path.join(episode_dir, f'frame_{frame_id:05d}.json')
+        with open(sidecar_path, 'w', encoding='utf-8') as file:
+            json.dump({'grounding': artifact, 'oracle_metrics': metrics}, file)
+
+        rgb = obs.get('front_rgb')
+        if rgb is None:
+            return sidecar_path
+        image = Image.fromarray(np.asarray(rgb, dtype=np.uint8)).convert('RGB')
+        draw = ImageDraw.Draw(image)
+        for object_id, estimate in artifact.get('objects', {}).items():
+            sample = next(
+                (item for item in estimate.get('samples', []) if item['camera'] == 'front'),
+                None,
+            )
+            if sample is None:
+                continue
+            x, y = sample['pixel_uv']
+            radius = 4
+            draw.ellipse(
+                (x - radius, y - radius, x + radius, y + radius),
+                outline=(255, 32, 32), width=2,
+            )
+            draw.text((x + 6, y - 6), object_id, fill=(255, 255, 0))
+        overlay_path = os.path.join(episode_dir, f'frame_{frame_id:05d}_front.png')
+        image.save(overlay_path)
+        return sidecar_path
 
     def _planner_act(self, instruction, coords, pose, history, roles, labels):
         try:
@@ -167,14 +237,19 @@ class EB_ManipulationHarnessEvaluator:
                 'semantic_rejects': 0, 'no_progress_rejected': 0,
             }
             trace = []
+            grounding_frames = []
 
             _, obs = self.env.reset()
             obs_dict = vars(copy.deepcopy(obs))
             if self.config.get('save_images', False):
                 self.env.save_image(['front_rgb'])
-            avg_obj_coord, object_roles, object_labels, id_to_sim_name = (
-                self._perceive_grounding(obs_dict)
-            )
+            grounding, grounding_metrics = self._perceive_grounding(obs_dict)
+            grounding_frames.append(grounding_metrics)
+            self._save_grounding_audit(obs_dict, grounding, grounding_metrics)
+            avg_obj_coord = grounding['planner_coords']
+            object_roles = grounding['roles']
+            object_labels = grounding['labels']
+            id_to_sim_name = grounding['id_to_sim_name']
             pose = self._current_pose(obs_dict)
             user_instruction = self.env.episode_language_instruction
             print(f"Instruction: {user_instruction}")
@@ -202,6 +277,10 @@ class EB_ManipulationHarnessEvaluator:
                     'id_to_sim_name': id_to_sim_name,
                     'raw_output': raw_text,
                     'invocation': invocation,
+                    'grounding_frame_id': grounding['frame_id'],
+                    'grounding_coordinate_source': grounding['coordinate_source'],
+                    'grounding_objects': grounding['objects'],
+                    'grounding_oracle_metrics': grounding_metrics,
                 }
 
                 if invocation is None:
@@ -279,7 +358,14 @@ class EB_ManipulationHarnessEvaluator:
                         self.env.save_image(['front_rgb'])
                     last_feedback = info.get('env_feedback', '')
                     sub_obs_dict = vars(copy.deepcopy(obs)) if not isinstance(obs, dict) else obs
-                    sub_coords, _, _, _ = self._perceive_grounding(sub_obs_dict)
+                    sub_grounding, sub_grounding_metrics = self._perceive_grounding(
+                        sub_obs_dict
+                    )
+                    grounding_frames.append(sub_grounding_metrics)
+                    self._save_grounding_audit(
+                        sub_obs_dict, sub_grounding, sub_grounding_metrics
+                    )
+                    sub_coords = sub_grounding['planner_coords']
                     sub_pose = self._current_pose(sub_obs_dict)
                     attachments, attachment_available = self._grasp_attachment_evidence(info)
                     attachment_evidence_available = (
@@ -306,9 +392,13 @@ class EB_ManipulationHarnessEvaluator:
                         break
 
                 obs_dict = vars(copy.deepcopy(obs)) if not isinstance(obs, dict) else obs
-                avg_obj_coord, object_roles, object_labels, id_to_sim_name = (
-                    self._perceive_grounding(obs_dict)
-                )
+                grounding, grounding_metrics = self._perceive_grounding(obs_dict)
+                grounding_frames.append(grounding_metrics)
+                self._save_grounding_audit(obs_dict, grounding, grounding_metrics)
+                avg_obj_coord = grounding['planner_coords']
+                object_roles = grounding['roles']
+                object_labels = grounding['labels']
+                id_to_sim_name = grounding['id_to_sim_name']
                 pose = self._current_pose(obs_dict)
 
                 execution_status = 'success' if step_results and step_results[-1]['action_success'] == 1.0 else 'failed'
@@ -391,6 +481,9 @@ class EB_ManipulationHarnessEvaluator:
             episode_info['planner_steps'] = self.planner.planner_steps
             episode_info['planner_output_error'] = self.planner.output_json_error
             episode_info['episode_elapsed_seconds'] = info.get('episode_elapsed_seconds', 0)
+            episode_info['grounding_metrics'] = summarize_oracle_frames(
+                grounding_frames
+            )
             self.save_episode_metric(episode_info)
             self.save_trace(trace)
             progress_bar.update()
