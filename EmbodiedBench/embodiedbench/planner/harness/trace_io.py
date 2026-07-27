@@ -36,6 +36,35 @@ def write_json_atomic(path, payload):
     os.replace(temporary_path, output_path)
 
 
+def resolve_git_commit(start_path):
+    """Resolve HEAD without requiring the git executable in the runtime."""
+    current = Path(start_path).resolve()
+    for parent in (current, *current.parents):
+        git_path = parent / ".git"
+        if git_path.is_file():
+            pointer = git_path.read_text(encoding="utf-8").strip()
+            if pointer.startswith("gitdir:"):
+                git_path = (git_path.parent / pointer.split(":", 1)[1].strip()).resolve()
+        if not git_path.is_dir():
+            continue
+        head = (git_path / "HEAD").read_text(encoding="utf-8").strip()
+        if not head.startswith("ref:"):
+            return head or None
+        reference = head.split(":", 1)[1].strip()
+        reference_path = git_path / reference
+        if reference_path.exists():
+            return reference_path.read_text(encoding="utf-8").strip() or None
+        packed_refs = git_path / "packed-refs"
+        if packed_refs.exists():
+            for line in packed_refs.read_text(encoding="utf-8").splitlines():
+                if line and not line.startswith(("#", "^")):
+                    commit, name = line.split(" ", 1)
+                    if name == reference:
+                        return commit
+        return None
+    return None
+
+
 def load_complete_jsonl(path):
     """Load complete records, tolerating only a truncated final line."""
     trace_path = Path(path)

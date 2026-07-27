@@ -8,6 +8,7 @@ from embodiedbench.planner.harness.trace_io import (
     append_jsonl_record,
     initialize_jsonl,
     load_complete_jsonl,
+    resolve_git_commit,
     summarize_trace_records,
     write_json_atomic,
 )
@@ -95,3 +96,14 @@ def test_atomic_json_never_leaves_temporary_file_after_success(tmp_path):
         "status": "completed"
     }
     assert not (tmp_path / "run_manifest.json.tmp").exists()
+
+
+def test_git_commit_resolves_from_loose_ref_without_git_executable(tmp_path):
+    git_path = tmp_path / ".git"
+    reference_path = git_path / "refs" / "heads" / "main"
+    reference_path.parent.mkdir(parents=True)
+    (git_path / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    reference_path.write_text("abc123\n", encoding="utf-8")
+    nested = tmp_path / "EmbodiedBench" / "running"
+    nested.mkdir(parents=True)
+    assert resolve_git_commit(nested) == "abc123"

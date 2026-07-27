@@ -16,7 +16,6 @@ Beta scope (see ``docs/HARNESS_VLA_NOT_IMPLEMENTED.md``):
 import os
 import copy
 import json
-import subprocess
 from datetime import datetime, timezone
 
 import numpy as np
@@ -37,6 +36,7 @@ from embodiedbench.planner.harness.trace_io import (
     append_jsonl_record,
     initialize_jsonl,
     load_complete_jsonl,
+    resolve_git_commit,
     summarize_trace_records,
     write_json_atomic,
 )
@@ -118,25 +118,15 @@ class EB_ManipulationHarnessEvaluator:
             json.dump(summary, file, ensure_ascii=False)
 
     def _write_run_manifest(self, status, error=None):
+        secret_keys = {'api_key', 'password', 'access_token', 'auth_token', 'secret'}
         redacted_config = {
-            key: ('<redacted>' if any(
-                secret in key.lower() for secret in ('api_key', 'password', 'token')
-            ) else value)
+            key: ('<redacted>' if key.lower() in secret_keys else value)
             for key, value in self.config.items()
         }
-        try:
-            commit = subprocess.run(
-                ['git', 'rev-parse', 'HEAD'],
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout.strip()
-        except (OSError, subprocess.CalledProcessError):
-            commit = None
         manifest = {
             'status': status,
             'updated_at_utc': datetime.now(timezone.utc).isoformat(),
-            'commit': commit,
+            'commit': resolve_git_commit(os.getcwd()),
             'eval_set': self.eval_set,
             'selected_indexes': list(self.config.get('selected_indexes', []) or []),
             'completed_episodes': int(getattr(self.env, '_current_episode_num', 0)),
