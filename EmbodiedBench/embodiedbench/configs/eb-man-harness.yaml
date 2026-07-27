@@ -5,6 +5,8 @@ base_url: http://localhost:11434/v1  # Ollama (OpenAI-compatible). Change to poi
 api_key: ollama
 temperature: 0.0
 max_tokens: 1024
+disable_thinking: false      # Ollama native API with think=false for reasoning models
+request_timeout: 600         # seconds per planner request
 
 # Evaluation scope
 down_sample_ratio: 1

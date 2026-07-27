@@ -7,13 +7,15 @@ from embodiedbench.evaluator.eb_manipulation_harness_evaluator import (
     EB_ManipulationHarnessEvaluator,
 )
 
+MODEL = sys.argv[1] if len(sys.argv) > 1 else 'qwen2.5:0.5b-instruct'
 
 config = {
-    'model_name': sys.argv[1] if len(sys.argv) > 1 else 'qwen2.5:0.5b-instruct',
+    'model_name': MODEL,
     'base_url': 'http://localhost:11434/v1',
     'api_key': 'ollama',
     'temperature': 0.0,
     'max_tokens': 1024,
+    'disable_thinking': MODEL.startswith('gemma4:'),
     'down_sample_ratio': 1.0,
     'selected_indexes': [0],
     'eval_sets': ['base'],

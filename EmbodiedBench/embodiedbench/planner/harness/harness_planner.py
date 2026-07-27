@@ -16,6 +16,8 @@ import json
 import os
 import re
 from typing import Dict, List, Optional, Sequence, Tuple
+from urllib import request
+from urllib.parse import urlparse
 
 from embodiedbench.planner.harness.global_memory import GlobalMemory
 from embodiedbench.planner.harness.primitives import normalize_invocation
@@ -116,6 +118,8 @@ class HarnessPlanner:
         global_memory: Optional[GlobalMemory] = None,
         temperature: float = 0.0,
         max_tokens: int = 1024,
+        disable_thinking: bool = False,
+        request_timeout: float = 600.0,
         client=None,
     ) -> None:
         self.model_name = model_name
@@ -127,6 +131,8 @@ class HarnessPlanner:
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY") or "ollama"
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.disable_thinking = disable_thinking
+        self.request_timeout = request_timeout
         self.global_memory = global_memory or GlobalMemory.seeded()
         self.system_prompt = build_system_prompt(self.global_memory.render())
 
@@ -150,6 +156,8 @@ class HarnessPlanner:
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": turn_prompt},
         ]
+        if self.disable_thinking:
+            return self._chat_ollama(messages)
         response = self.client.chat.completions.create(
             model=self.model_name,
             messages=messages,
@@ -157,6 +165,34 @@ class HarnessPlanner:
             max_tokens=self.max_tokens,
         )
         return response.choices[0].message.content or ""
+
+    def _chat_ollama(self, messages: List[Dict[str, str]]) -> str:
+        base_url = self.base_url.rstrip("/")
+        parsed_url = urlparse(base_url)
+        if parsed_url.path not in ("", "/v1"):
+            raise ValueError(
+                "disable_thinking requires an Ollama base URL ending in /v1"
+            )
+        if parsed_url.path == "/v1":
+            base_url = base_url[:-3]
+        payload = json.dumps({
+            "model": self.model_name,
+            "messages": messages,
+            "stream": False,
+            "think": False,
+            "options": {
+                "temperature": self.temperature,
+                "num_predict": self.max_tokens,
+            },
+        }).encode("utf-8")
+        req = request.Request(
+            f"{base_url}/api/chat",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        with request.urlopen(req, timeout=self.request_timeout) as response:
+            result = json.load(response)
+        return result.get("message", {}).get("content", "")
 
     def act(
         self,

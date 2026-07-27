@@ -431,6 +431,8 @@ class EB_ManipulationHarnessEvaluator:
                 global_memory=GlobalMemory.load(self.config.get('global_memory_path', '')),
                 temperature=self.config.get('temperature', 0.0),
                 max_tokens=self.config.get('max_tokens', 1024),
+                disable_thinking=self.config.get('disable_thinking', False),
+                request_timeout=self.config.get('request_timeout', 600.0),
             )
             self.evaluate()
             with open(os.path.join(self.log_path, 'config.txt'), 'w') as f:

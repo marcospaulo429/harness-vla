@@ -1,6 +1,7 @@
 """Unit tests for GlobalMemory and the planner JSON parsing (no network)."""
 
 import json
+from unittest.mock import patch
 
 from embodiedbench.planner.harness.global_memory import (
     GlobalMemory,
@@ -156,6 +157,48 @@ def test_planner_accepts_optional_roles_and_labels():
         object_labels={"object 1": "first star", "object 2": "shape sorter"},
     )
     assert invocation["action"] == "release"
+
+
+def test_planner_can_disable_ollama_thinking():
+    response = type("Response", (), {
+        "__enter__": lambda self: self,
+        "__exit__": lambda self, *args: None,
+        "read": lambda self: b'{"message":{"content":"{\\"action\\":\\"release\\"}"}}',
+    })()
+    planner = HarnessPlanner(
+        model_name="gemma4:12b",
+        base_url="http://localhost:11434/v1",
+        disable_thinking=True,
+        request_timeout=123,
+        client=_FakeClient("unused"),
+    )
+
+    with patch("embodiedbench.planner.harness.harness_planner.request.urlopen", return_value=response) as urlopen:
+        invocation, raw = planner.act("x", {}, [0, 0, 0, 0, 0, 0, 1], [])
+
+    assert invocation["action"] == "release"
+    assert raw == '{"action":"release"}'
+    sent = json.loads(urlopen.call_args.args[0].data)
+    assert sent["think"] is False
+    assert sent["options"]["num_predict"] == 1024
+    assert urlopen.call_args.args[0].full_url == "http://localhost:11434/api/chat"
+    assert urlopen.call_args.kwargs["timeout"] == 123
+
+
+def test_disable_ollama_thinking_rejects_incompatible_url_path():
+    planner = HarnessPlanner(
+        model_name="gemma4:12b",
+        base_url="http://localhost:11434/openai/v1",
+        disable_thinking=True,
+        client=_FakeClient("unused"),
+    )
+
+    try:
+        planner._chat("x")
+    except ValueError as error:
+        assert "Ollama base URL" in str(error)
+    else:
+        raise AssertionError("Expected incompatible Ollama URL to be rejected")
 
 
 def test_turn_prompt_separates_roles_and_uses_labels_without_color_claims():
