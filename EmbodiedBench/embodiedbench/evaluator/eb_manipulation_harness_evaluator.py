@@ -16,6 +16,8 @@ Beta scope (see ``docs/HARNESS_VLA_NOT_IMPLEMENTED.md``):
 import os
 import copy
 import json
+import subprocess
+from datetime import datetime, timezone
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -31,6 +33,13 @@ from embodiedbench.envs.eb_manipulation.rgbd_grounding import (
 )
 from embodiedbench.planner.harness.global_memory import GlobalMemory
 from embodiedbench.planner.harness.harness_planner import HarnessPlanner
+from embodiedbench.planner.harness.trace_io import (
+    append_jsonl_record,
+    initialize_jsonl,
+    load_complete_jsonl,
+    summarize_trace_records,
+    write_json_atomic,
+)
 from embodiedbench.planner.harness.evaluation_guards import (
     NoProgressGuard,
     validate_vla_semantics,
@@ -89,10 +98,56 @@ class EB_ManipulationHarnessEvaluator:
             json.dump(episode_info, f, ensure_ascii=False)
 
     def save_trace(self, trace):
+        trace_path = self._trace_path()
+        initialize_jsonl(trace_path)
+        for record in trace:
+            append_jsonl_record(trace_path, record)
+
+    def _trace_path(self):
         filename = 'trace_episode_{}.jsonl'.format(self.env._current_episode_num)
-        with open(os.path.join(self._results_dir(), filename), 'w', encoding='utf-8') as f:
-            for record in trace:
-                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        return os.path.join(self._results_dir(), filename)
+
+    def _record_trace(self, trace, record):
+        trace.append(record)
+        append_jsonl_record(self._trace_path(), record)
+
+    def save_trace_summary(self):
+        summary = summarize_trace_records(load_complete_jsonl(self._trace_path()))
+        filename = 'trace_summary_episode_{}.json'.format(self.env._current_episode_num)
+        with open(os.path.join(self._results_dir(), filename), 'w', encoding='utf-8') as file:
+            json.dump(summary, file, ensure_ascii=False)
+
+    def _write_run_manifest(self, status, error=None):
+        redacted_config = {
+            key: ('<redacted>' if any(
+                secret in key.lower() for secret in ('api_key', 'password', 'token')
+            ) else value)
+            for key, value in self.config.items()
+        }
+        try:
+            commit = subprocess.run(
+                ['git', 'rev-parse', 'HEAD'],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+        except (OSError, subprocess.CalledProcessError):
+            commit = None
+        manifest = {
+            'status': status,
+            'updated_at_utc': datetime.now(timezone.utc).isoformat(),
+            'commit': commit,
+            'eval_set': self.eval_set,
+            'selected_indexes': list(self.config.get('selected_indexes', []) or []),
+            'completed_episodes': int(getattr(self.env, '_current_episode_num', 0)),
+            'config': redacted_config,
+        }
+        if error is not None:
+            manifest['error'] = {
+                'type': type(error).__name__,
+                'message': str(error),
+            }
+        write_json_atomic(os.path.join(self.log_path, 'run_manifest.json'), manifest)
 
     def print_task_eval_results(self, filename):
         folder_path = self._results_dir()
@@ -257,6 +312,7 @@ class EB_ManipulationHarnessEvaluator:
             grounding_frames = []
 
             _, obs = self.env.reset()
+            initialize_jsonl(self._trace_path())
             obs_dict = vars(copy.deepcopy(obs))
             if self.config.get('save_images', False):
                 self.env.save_image(['front_rgb'])
@@ -306,7 +362,7 @@ class EB_ManipulationHarnessEvaluator:
                     record['status'] = 'parse_error'
                     record['feedback'] = feedback
                     history.append({'action': None, 'status': 'parse_error', 'feedback': feedback})
-                    trace.append(record)
+                    self._record_trace(trace, record)
                     continue
 
                 semantic_rejection = validate_vla_semantics(
@@ -323,7 +379,7 @@ class EB_ManipulationHarnessEvaluator:
                     })
                     episode_info['semantic_rejects'] += 1
                     history.append({'action': invocation, 'status': status, 'feedback': feedback})
-                    trace.append(record)
+                    self._record_trace(trace, record)
                     continue
 
                 if no_progress_guard.should_reject(invocation):
@@ -343,7 +399,7 @@ class EB_ManipulationHarnessEvaluator:
                     history.append({
                         'action': invocation, 'status': 'no_progress_rejected', 'feedback': feedback
                     })
-                    trace.append(record)
+                    self._record_trace(trace, record)
                     continue
 
                 # Compile the primitive to discrete actions.
@@ -354,7 +410,7 @@ class EB_ManipulationHarnessEvaluator:
                     record['status'] = 'compile_error'
                     record['feedback'] = feedback
                     history.append({'action': invocation, 'status': 'compile_error', 'feedback': feedback})
-                    trace.append(record)
+                    self._record_trace(trace, record)
                     continue
 
                 mode = result.meta.get('mode')
@@ -546,7 +602,7 @@ class EB_ManipulationHarnessEvaluator:
                     }
                     record['grasp_outcome'] = grasp_outcome
                 history.append({'action': invocation, 'status': record['status'], 'feedback': feedback})
-                trace.append(record)
+                self._record_trace(trace, record)
 
             # Episode metrics.
             episode_info['instruction'] = user_instruction
@@ -564,7 +620,7 @@ class EB_ManipulationHarnessEvaluator:
                 object_roles, held_object_id, placed_object_ids
             )
             self.save_episode_metric(episode_info)
-            self.save_trace(trace)
+            self.save_trace_summary()
             progress_bar.update()
 
         self.print_task_eval_results(filename="summary.json")
@@ -606,9 +662,17 @@ class EB_ManipulationHarnessEvaluator:
                 disable_thinking=self.config.get('disable_thinking', False),
                 request_timeout=self.config.get('request_timeout', 600.0),
             )
-            self.evaluate()
-            with open(os.path.join(self.log_path, 'config.txt'), 'w') as f:
-                f.write(str(self.config))
+            self._write_run_manifest('running')
+            try:
+                self.evaluate()
+            except BaseException as error:
+                self._write_run_manifest('incomplete', error=error)
+                raise
+            else:
+                self._write_run_manifest('completed')
+            finally:
+                with open(os.path.join(self.log_path, 'config.txt'), 'w') as f:
+                    f.write(str(self.config))
 
     def check_config_valid(self):
         # Beta is language-only by construction; warn if configured otherwise.
