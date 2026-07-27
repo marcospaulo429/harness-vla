@@ -52,7 +52,7 @@
 
 ### M4 — Task Specific Memory offline
 
-- **Tipo:** paper-compatible enquanto a fonte primaria indicada nao estiver verificavel; schema e gates locais sao beta-only.
+- **Tipo:** paper-confirmed para memoria semantica/procedural parametrizada; schema e gates locais sao beta-only.
 - **Fonte:** §2.2, Apêndices A e E.3.
 - **Objetivo:** gerar audit JSON semântico e command JSONL procedural somente de rollout verificado.
 - **Aceitação:** uma primitiva por linha, ordem preservada, sem coordenadas literais quando há binding simbólico.
@@ -60,10 +60,11 @@
 
 ### M5 — Retrieval e re-grounding de Task Specific Memory
 
-- **Tipo:** paper-confirmed.
+- **Tipo:** paper-confirmed para prior estrutural e re-grounding atual; algoritmo de selecao e matching local sao paper-compatible/beta-only.
 - **Fonte:** §2.2, §3.2, Apêndices A/C/E.3.
 - **Objetivo:** usar a memória como prior estrutural e resolver posições na cena atual.
 - **Aceitação:** posições trocadas mudam bindings, não copiam xyz da seed.
+- **Estado:** resolver offline concluido no commit `4b7c986`; gate de tres cenas aprovado. Retrieval automatico, prompt e deployment continuam pendentes.
 
 ### M6 — Fases bootstrap e deployment
 

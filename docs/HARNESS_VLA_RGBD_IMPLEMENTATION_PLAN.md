@@ -160,9 +160,10 @@ parcial valida.
 
 ## Etapa 4 - Task Specific Memory offline
 
-**Classificacao:** paper-compatible enquanto a fonte primaria indicada como
-`arXiv:2607.08448v2` nao estiver verificavel. O schema, criterios conservadores,
-hashes e escrita atomica sao beta-only.
+**Classificacao:** paper-confirmed para memoria semantica/procedural e
+parametrizacao simbolica, conforme Secao 2.2 e Apendices A/E.3 de
+`arXiv:2607.08448v2`, verificado apos a implementacao. O schema, criterios
+conservadores, hashes e escrita atomica sao beta-only.
 
 **Estado:** concluida em 2026-07-27 no commit `ddefadb`. O gerador offline
 produz memoria simbolica deterministica apenas de rollout integralmente
@@ -183,7 +184,17 @@ promovida e a memoria ainda nao e consumida pelo planner.
 
 ## Etapa 5 - Retrieval e re-grounding
 
-**Classificacao:** paper-confirmed; algoritmo local e paper-compatible.
+**Classificacao:** paper-confirmed para recuperar a trace como prior estrutural e
+re-groundear toda geometria da observacao atual (Secao 2.2 e Apendice E.3).
+Selecao explicita do pacote, normalizacao de labels e rejeicao de ambiguidade
+sao paper-compatible/beta-only porque o algoritmo de busca nao e especificado.
+
+**Estado:** resolver offline concluido em 2026-07-27 no commit `4b7c986`.
+Carregamento, hash, binding unico e re-grounding passaram 124 testes e um gate
+de tres cenas: duas posicoes foram resolvidas com coordenadas atuais diferentes
+e uma cena sem objeto foi rejeitada. Ver
+`docs/runs/HARNESS_TASK_MEMORY_REGROUNDING_3SCENE_20260727.md`. Retrieval
+automatico e injecao no planner permanecem pendentes por nao haver seed real.
 
 Entregas:
 
@@ -192,8 +203,9 @@ Entregas:
 - re-grounding via world map;
 - testes de position swap e objeto ausente.
 
-Gate: trocar posicoes altera coordenadas resolvidas sem alterar a estrutura da
-memoria nem copiar xyz da seed.
+Gate offline aprovado: trocar posicoes altera coordenadas resolvidas sem alterar
+a estrutura da memoria nem copiar xyz da seed. O gate de deployment permanece
+pendente.
 
 ## Etapa 6 - Bootstrap e deployment
 

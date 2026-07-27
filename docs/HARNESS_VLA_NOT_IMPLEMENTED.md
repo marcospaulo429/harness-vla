@@ -50,11 +50,13 @@ does not wrap this mock or claim that its compiled actions are learned chunks;
 integration requires a future real frozen-VLA adapter.
 
 ### 2. Task Specific Memory (few-shot / bootstrapping)
-The beta can now generate an offline, symbolic procedural (`commands.jsonl`) and
+The beta can generate an offline, symbolic procedural (`commands.jsonl`) and
 semantic (`audit.json`) memory package from a fully verified successful rollout.
-It conservatively rejected all three current candidates, so no real seed exists.
-Retrieval, current-scene re-grounding, exploratory bootstrap, planner injection,
-and read-only deployment remain **not implemented**. The evaluated planner is
+It can also load an explicitly selected package, verify its hash, and re-ground
+symbolic bindings against current-scene labels, roles, and RGB-D-derived
+coordinates. It conservatively rejected all three current candidates, so no real
+seed exists. Automatic retrieval, exploratory bootstrap, planner injection, and
+read-only deployment remain **not implemented**. The evaluated planner is
 therefore still zero-shot.
 
 ### 3. Automatic Global Memory updates
