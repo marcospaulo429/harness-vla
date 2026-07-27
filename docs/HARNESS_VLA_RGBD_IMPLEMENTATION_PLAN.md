@@ -211,6 +211,12 @@ pendente.
 
 **Classificacao:** paper-confirmed; budgets locais sao paper-compatible.
 
+**Estado:** contrato puro concluido em 2026-07-27 no commit `3cdf373`. As
+permissoes, particao de seeds, budgets e exclusao da seed de bootstrap passaram
+150 testes com a fixture bootstrap `[0]` e deployment `[15,38]`. A integracao no
+evaluator ainda esta pendente; portanto nenhuma run existente e classificada
+como protegida por este guard. Ver `docs/runs/HARNESS_PHASE_POLICY_20260727.md`.
+
 Entregas:
 
 - bootstrap com exploracao e escrita;
@@ -218,8 +224,8 @@ Entregas:
 - separacao de seeds e metricas;
 - manifests que rejeitam vazamento.
 
-Gate: episodios de bootstrap nunca entram na metrica de deployment e nenhuma
-memoria muda durante deployment.
+Gate de contrato aprovado; gate de run pendente: episodios de bootstrap nunca
+entram na metrica de deployment e nenhuma memoria muda durante deployment.
 
 ## Etapa 7 - Global Memory incremental
 

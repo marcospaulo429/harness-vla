@@ -72,6 +72,7 @@
 - **Fonte:** §2.2 e Apêndice C.
 - **Objetivo:** reset/budget amplo e escrita de memória somente no bootstrap; deployment estrito e read-only.
 - **Aceitação:** seed de bootstrap nunca entra na métrica final.
+- **Estado:** contrato puro concluido no commit `3cdf373`; integracao no evaluator e gate de run permanecem pendentes.
 
 ### M7 — Global Memory auditável e incremental
 
