@@ -4,7 +4,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 from embodiedbench.planner.harness.trace_io import (
     load_complete_jsonl,
@@ -47,6 +47,14 @@ class TaskMemoryDecision:
     reasons: Sequence[str]
     audit: Optional[Dict] = None
     commands: Sequence[Dict] = ()
+
+
+def _canonical_commands_payload(commands):
+    return "".join(
+        json.dumps(command, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        + "\n"
+        for command in commands
+    )
 
 
 def _binding(record, object_id):
@@ -146,6 +154,98 @@ def validate_task_memory(audit, commands):
                 raise ValueError("binding roles are missing")
             if not all(isinstance(role, str) and role for role in binding["roles"]):
                 raise ValueError("binding roles must be non-empty strings")
+    source = audit.get("source")
+    expected_hash = source.get("commands_sha256") if isinstance(source, dict) else None
+    actual_hash = hashlib.sha256(
+        _canonical_commands_payload(commands).encode("utf-8")
+    ).hexdigest()
+    if not isinstance(expected_hash, str) or expected_hash != actual_hash:
+        raise ValueError("command hash mismatch")
+
+
+def load_task_memory(memory_dir):
+    """Load and validate one deterministic ``audit.json``/``commands.jsonl`` pair."""
+    memory_path = Path(memory_dir)
+    audit = json.loads((memory_path / "audit.json").read_text(encoding="utf-8"))
+    commands_path = memory_path / "commands.jsonl"
+    payload = commands_path.read_bytes()
+    if payload and not payload.endswith(b"\n"):
+        raise ValueError("commands JSONL is incomplete")
+    try:
+        commands = tuple(
+            json.loads(line)
+            for line in payload.decode("utf-8").splitlines()
+            if line.strip()
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("invalid commands JSONL") from error
+    validate_task_memory(audit, commands)
+    return audit, commands
+
+
+def _normalize_symbol(value):
+    return " ".join(str(value).strip().lower().split())
+
+
+def _resolve_binding(binding, object_coords, object_labels, object_roles):
+    required_label = _normalize_symbol(binding["label"])
+    required_roles = {_normalize_symbol(role) for role in binding["roles"]}
+    matches = []
+    for object_id in object_coords:
+        if object_id not in object_labels or object_id not in object_roles:
+            continue
+        label_matches = _normalize_symbol(object_labels[object_id]) == required_label
+        current_roles = {_normalize_symbol(role) for role in object_roles[object_id]}
+        if label_matches and required_roles.issubset(current_roles):
+            matches.append(object_id)
+    if not matches:
+        raise ValueError(
+            "no current grounding match for label {!r} with roles {}".format(
+                binding["label"], sorted(binding["roles"])
+            )
+        )
+    if len(matches) > 1:
+        raise ValueError(
+            "ambiguous current grounding for label {!r} with roles {}: {}".format(
+                binding["label"], sorted(binding["roles"]), sorted(matches)
+            )
+        )
+    return matches[0]
+
+
+def resolve_task_memory_commands(
+    commands: Sequence[Mapping],
+    object_coords: Mapping[str, Sequence[float]],
+    object_labels: Mapping[str, str],
+    object_roles: Mapping[str, Sequence[str]],
+) -> Tuple[Dict, ...]:
+    """Resolve symbolic bindings against current grounding without mutating memory."""
+    if _contains_forbidden_key(commands):
+        raise ValueError("seed commands contain forbidden spatial data")
+    resolved_commands = []
+    for command in commands:
+        resolved = dict(command)
+        resolved_ids = {}
+        for field in ("target", "object", "destination"):
+            binding = command.get(field)
+            if binding is None:
+                continue
+            object_id = _resolve_binding(
+                binding, object_coords, object_labels, object_roles
+            )
+            resolved[field] = object_id
+            resolved_ids[field] = object_id
+        if command.get("action") == "move_to" and "target" in resolved_ids:
+            xyz = object_coords[resolved_ids["target"]]
+            if (
+                not isinstance(xyz, (list, tuple))
+                or len(xyz) != 3
+                or not all(isinstance(value, (int, float)) for value in xyz)
+            ):
+                raise ValueError("current target coordinates must be numeric [x, y, z]")
+            resolved["xyz"] = list(xyz)
+        resolved_commands.append(resolved)
+    return tuple(resolved_commands)
 
 
 def build_task_memory(records, episode_result, trace_complete=True):
@@ -190,10 +290,7 @@ def build_task_memory(records, episode_result, trace_complete=True):
     if reasons:
         return TaskMemoryDecision(False, tuple(sorted(set(reasons))))
 
-    canonical_commands = "".join(
-        json.dumps(command, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
-        for command in commands
-    )
+    canonical_commands = _canonical_commands_payload(commands)
     canonical_trace = "".join(
         json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
         for record in records
@@ -238,10 +335,7 @@ def promote_task_memory(trace_path, episode_result_path, output_dir):
     memory_path = Path(output_dir)
     memory_path.mkdir(parents=True, exist_ok=True)
     write_json_atomic(memory_path / "audit.json", decision.audit)
-    commands_payload = "".join(
-        json.dumps(command, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
-        for command in decision.commands
-    )
+    commands_payload = _canonical_commands_payload(decision.commands)
     write_text_atomic(memory_path / "commands.jsonl", commands_payload)
     return decision
 

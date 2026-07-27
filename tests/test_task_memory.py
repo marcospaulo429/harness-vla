@@ -2,11 +2,15 @@
 
 import json
 
+import pytest
+
 from embodiedbench.planner.harness.task_memory import (
     FORBIDDEN_OUTPUT_KEYS,
     build_task_memory,
     evaluate_memory_candidates,
+    load_task_memory,
     promote_task_memory,
+    resolve_task_memory_commands,
     validate_task_memory,
 )
 
@@ -64,6 +68,22 @@ def _all_keys(value):
     if isinstance(value, list) or isinstance(value, tuple):
         return set().union(*(_all_keys(child) for child in value), set())
     return set()
+
+
+def _current_grounding(red_xyz=(11, 12, 13), container_xyz=(21, 22, 23)):
+    object_coords = {
+        "current red": list(red_xyz),
+        "current container": list(container_xyz),
+    }
+    object_labels = {
+        "current red": " Red   Cube ",
+        "current container": "silver container",
+    }
+    object_roles = {
+        "current red": ["manipulable", "visible"],
+        "current container": ["destination", "visible"],
+    }
+    return object_coords, object_labels, object_roles
 
 
 def test_verified_rollout_generates_ordered_symbolic_memory():
@@ -198,3 +218,118 @@ def test_binding_roles_must_be_non_empty_strings():
         assert str(error) == "binding roles must be non-empty strings"
     else:
         raise AssertionError("non-string binding roles must be rejected")
+
+
+def test_position_swap_uses_current_xyz_without_mutating_seed_commands():
+    decision = build_task_memory(_verified_rollout(), _successful_result())
+    original = tuple(json.loads(json.dumps(command)) for command in decision.commands)
+    first = resolve_task_memory_commands(
+        decision.commands, *_current_grounding(red_xyz=(1, 2, 3))
+    )
+    swapped = resolve_task_memory_commands(
+        decision.commands, *_current_grounding(red_xyz=(21, 22, 23), container_xyz=(1, 2, 3))
+    )
+
+    assert first[0]["xyz"] == [1, 2, 3]
+    assert swapped[0]["xyz"] == [21, 22, 23]
+    assert decision.commands == original
+    assert first[1]["object"] == "current red"
+    assert first[2]["destination"] == "current container"
+    assert all("xyz" not in command for command in first[1:])
+
+
+def test_resolver_rejects_missing_object():
+    object_coords, object_labels, object_roles = _current_grounding()
+    del object_coords["current red"]
+    del object_labels["current red"]
+    del object_roles["current red"]
+    commands = build_task_memory(_verified_rollout(), _successful_result()).commands
+
+    with pytest.raises(ValueError, match="no current grounding match"):
+        resolve_task_memory_commands(
+            commands, object_coords, object_labels, object_roles
+        )
+
+
+def test_resolver_rejects_ambiguous_binding():
+    object_coords, object_labels, object_roles = _current_grounding()
+    object_coords["other red"] = [31, 32, 33]
+    object_labels["other red"] = "red cube"
+    object_roles["other red"] = ["manipulable"]
+    commands = build_task_memory(_verified_rollout(), _successful_result()).commands
+
+    with pytest.raises(ValueError, match="ambiguous current grounding"):
+        resolve_task_memory_commands(
+            commands, object_coords, object_labels, object_roles
+        )
+
+
+def test_resolver_requires_all_binding_roles():
+    object_coords, object_labels, object_roles = _current_grounding()
+    object_roles["current red"] = ["visible"]
+    commands = build_task_memory(_verified_rollout(), _successful_result()).commands
+
+    with pytest.raises(ValueError, match="no current grounding match"):
+        resolve_task_memory_commands(
+            commands, object_coords, object_labels, object_roles
+        )
+
+
+def test_loader_rejects_tampered_command_hash(tmp_path):
+    trace_path = tmp_path / "trace.jsonl"
+    result_path = tmp_path / "episode.json"
+    memory_path = tmp_path / "memory"
+    trace_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in _verified_rollout()),
+        encoding="utf-8",
+    )
+    result_path.write_text(json.dumps(_successful_result()), encoding="utf-8")
+    promote_task_memory(trace_path, result_path, memory_path)
+    commands_path = memory_path / "commands.jsonl"
+    lines = commands_path.read_text(encoding="utf-8").splitlines()
+    command = json.loads(lines[0])
+    command["action"] = "release"
+    lines[0] = json.dumps(command, sort_keys=True, separators=(",", ":"))
+    commands_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="command hash mismatch"):
+        load_task_memory(memory_path)
+
+
+def test_loader_and_resolver_preserve_command_order(tmp_path):
+    trace_path = tmp_path / "trace.jsonl"
+    result_path = tmp_path / "episode.json"
+    memory_path = tmp_path / "memory"
+    trace_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in _verified_rollout()),
+        encoding="utf-8",
+    )
+    result_path.write_text(json.dumps(_successful_result()), encoding="utf-8")
+    promote_task_memory(trace_path, result_path, memory_path)
+
+    audit, commands = load_task_memory(memory_path)
+    resolved = resolve_task_memory_commands(commands, *_current_grounding())
+
+    assert audit["command_count"] == 3
+    assert [command["sequence"] for command in commands] == [1, 2, 3]
+    assert [command["sequence"] for command in resolved] == [1, 2, 3]
+    assert [command["action"] for command in resolved] == [
+        "move_to",
+        "vla_act",
+        "vla_act",
+    ]
+
+
+def test_resolver_rejects_seed_coordinates():
+    commands = [
+        {
+            "sequence": 1,
+            "source_turn": 1,
+            "action": "move_to",
+            "target": {"label": "red cube", "roles": ["manipulable"]},
+            "xyz": [99, 99, 99],
+        }
+    ]
+
+    with pytest.raises(ValueError, match="seed commands contain forbidden spatial data"):
+        resolve_task_memory_commands(commands, *_current_grounding())
