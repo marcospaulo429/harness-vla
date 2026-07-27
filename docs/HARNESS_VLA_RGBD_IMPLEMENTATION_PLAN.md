@@ -121,6 +121,11 @@ como verificados sem a evidencia exigida.
 `place_tolerance=12.0` voxels. Estes valores instrumentam a beta e nao sao
 atribuidos ao paper.
 
+**Estado:** concluida em 2026-07-27 no commit `92f5555`. A run fixa de tres
+episodios manteve `task_success=1/3` e revelou 7 falhas de pos-condicao entre 32
+primitivas, apesar de `action_success=1` nos 60 env steps. Ver
+`docs/runs/HARNESS_POSTCONDITIONS_3EP_20260727.md`.
+
 Entregas:
 
 - `move_to` validado por tolerancia de pose;
