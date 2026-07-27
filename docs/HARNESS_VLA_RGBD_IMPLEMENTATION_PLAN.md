@@ -139,8 +139,14 @@ fisico nos tres episodios.
 
 ## Etapa 3 - Trace incremental resistente a crash
 
-**Classificacao:** registro por turno paper-confirmed; flush e atomicidade
-paper-compatible.
+**Classificacao:** paper-compatible enquanto a fonte primaria indicada como
+`arXiv:2607.08448v2` nao estiver verificavel; `fsync`, tolerancia a linha
+truncada, resumo reconstruido e manifesto atomico sao beta-only.
+
+**Estado:** concluida em 2026-07-27 nos commits `e893aa2` e `f9ff6fc`. A run fixa
+de tres episodios preservou 32/32 turns em JSONL, e os resumos reconstruidos
+concordaram com turns, env steps, `task_success` e pos-condicoes dos resultados
+oficiais. Ver `docs/runs/HARNESS_INCREMENTAL_TRACE_3EP_20260727.md`.
 
 Entregas:
 
