@@ -160,7 +160,15 @@ parcial valida.
 
 ## Etapa 4 - Task Specific Memory offline
 
-**Classificacao:** paper-confirmed.
+**Classificacao:** paper-compatible enquanto a fonte primaria indicada como
+`arXiv:2607.08448v2` nao estiver verificavel. O schema, criterios conservadores,
+hashes e escrita atomica sao beta-only.
+
+**Estado:** concluida em 2026-07-27 no commit `ddefadb`. O gerador offline
+produz memoria simbolica deterministica apenas de rollout integralmente
+verificado. Nos mesmos tres episodios da Etapa 3, rejeitou corretamente 3/3
+candidatos; inclusive o episodio com `task_success=1` continha pos-condicoes
+nao verificadas. Ver `docs/runs/HARNESS_TASK_MEMORY_OFFLINE_3EP_20260727.md`.
 
 Entregas:
 
@@ -170,7 +178,8 @@ Entregas:
 - bindings simbolicos sem coordenadas literais.
 
 Gate: memoria de seed e reproduzivel, rejeita rollout suspeito e passa testes de
-schema e ordenacao.
+schema e ordenacao. Gate de infraestrutura aprovado; nenhuma seed real foi
+promovida e a memoria ainda nao e consumida pelo planner.
 
 ## Etapa 5 - Retrieval e re-grounding
 

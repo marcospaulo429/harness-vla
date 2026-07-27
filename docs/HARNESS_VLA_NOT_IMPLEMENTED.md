@@ -50,10 +50,12 @@ does not wrap this mock or claim that its compiled actions are learned chunks;
 integration requires a future real frozen-VLA adapter.
 
 ### 2. Task Specific Memory (few-shot / bootstrapping)
-The paper's per-task procedural (JSONL) + semantic (JSON) memory that is built
-during an exploratory phase is **not implemented**. The beta is **zero-shot
-only** — no exploration and no accumulated task traces. Per-turn scene bindings
-are refreshed, but this is not Task Specific Memory retrieval or seed transfer.
+The beta can now generate an offline, symbolic procedural (`commands.jsonl`) and
+semantic (`audit.json`) memory package from a fully verified successful rollout.
+It conservatively rejected all three current candidates, so no real seed exists.
+Retrieval, current-scene re-grounding, exploratory bootstrap, planner injection,
+and read-only deployment remain **not implemented**. The evaluated planner is
+therefore still zero-shot.
 
 ### 3. Automatic Global Memory updates
 Global Memory is a **static hand-written seed**. The paper distills success rules

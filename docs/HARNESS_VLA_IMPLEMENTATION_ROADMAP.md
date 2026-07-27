@@ -52,10 +52,11 @@
 
 ### M4 — Task Specific Memory offline
 
-- **Tipo:** paper-confirmed.
+- **Tipo:** paper-compatible enquanto a fonte primaria indicada nao estiver verificavel; schema e gates locais sao beta-only.
 - **Fonte:** §2.2, Apêndices A e E.3.
 - **Objetivo:** gerar audit JSON semântico e command JSONL procedural somente de rollout verificado.
 - **Aceitação:** uma primitiva por linha, ordem preservada, sem coordenadas literais quando há binding simbólico.
+- **Estado:** concluido no commit `ddefadb`; 117 testes passaram e 0/3 rollouts reais foram promovidos, como esperado pelas pos-condicoes nao verificadas.
 
 ### M5 — Retrieval e re-grounding de Task Specific Memory
 
