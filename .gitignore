@@ -151,6 +151,9 @@ activemq-data/
 .env
 .envrc
 .venv
+EmbodiedBench/.openvla-cpu-venv/
+openvla_cpu_eval/cache/
+openvla_cpu_eval/checkpoint/
 env/
 venv/
 ENV/
