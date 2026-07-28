@@ -261,6 +261,15 @@ def test_classify_grasp_attachment_matches_sim_name_mapping():
     assert result["classification_source"] == "attachment"
 
 
+def test_classify_grasp_attachment_matches_visual_shape_to_physical_body():
+    result = classify_grasp_outcome(
+        "object 3", ["star_normal0"], target_sim_name="star_normal_visual0"
+    )
+    assert result["outcome"] == "grasp_verified"
+    assert result["reason"] == "target_attached"
+    assert result["matched_grasped_object_name"] == "star_normal0"
+
+
 def test_unmapped_attachment_falls_back_to_geometry():
     result = classify_grasp_outcome(
         "object 1", ["cube_basic0"], [10, 10, 10], [10, 10, 16],

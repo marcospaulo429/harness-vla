@@ -80,6 +80,10 @@ class PrimitiveError(ValueError):
     """Raised when a primitive invocation cannot be compiled to actions."""
 
 
+def _physical_object_name(sim_name: str) -> str:
+    return sim_name.replace("_visual", "")
+
+
 def classify_grasp_outcome(
     target_object_id: str,
     grasped_object_names: Optional[Sequence[str]] = None,
@@ -109,6 +113,7 @@ def classify_grasp_outcome(
         "target_object_id": target,
         "target_sim_name": target_sim,
         "grasped_object_names": attached,
+        "matched_grasped_object_name": None,
         "object_lift": None,
         "object_displacement": None,
         "gripper_lift": None,
@@ -162,7 +167,17 @@ def classify_grasp_outcome(
             geometry_outcome = "grasp_unverified"
 
     if attached and target_sim:
-        target_attached = target_sim in attached
+        target_physical_name = _physical_object_name(target_sim)
+        matched_name = next(
+            (
+                name
+                for name in attached
+                if _physical_object_name(name) == target_physical_name
+            ),
+            None,
+        )
+        target_attached = matched_name is not None
+        metrics["matched_grasped_object_name"] = matched_name
         metrics["classification_source"] = "attachment"
         if geometry_outcome is not None:
             metrics["geometry_consistent_with_attachment"] = (
