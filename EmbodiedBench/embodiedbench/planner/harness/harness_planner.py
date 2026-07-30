@@ -119,9 +119,12 @@ class HarnessPlanner:
         temperature: float = 0.0,
         max_tokens: int = 1024,
         disable_thinking: bool = False,
+        enable_thinking: bool = False,
         request_timeout: float = 600.0,
         client=None,
     ) -> None:
+        if disable_thinking and enable_thinking:
+            raise ValueError("disable_thinking and enable_thinking are mutually exclusive")
         self.model_name = model_name
         self.base_url = (
             base_url
@@ -132,6 +135,8 @@ class HarnessPlanner:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.disable_thinking = disable_thinking
+        self.enable_thinking = enable_thinking
+        self.last_thinking: Optional[str] = None
         self.request_timeout = request_timeout
         self.global_memory = global_memory or GlobalMemory.seeded()
         self.system_prompt = build_system_prompt(self.global_memory.render())
@@ -156,8 +161,8 @@ class HarnessPlanner:
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": turn_prompt},
         ]
-        if self.disable_thinking:
-            return self._chat_ollama(messages)
+        if self.disable_thinking or self.enable_thinking:
+            return self._chat_ollama(messages, think=self.enable_thinking)
         response = self.client.chat.completions.create(
             model=self.model_name,
             messages=messages,
@@ -166,12 +171,12 @@ class HarnessPlanner:
         )
         return response.choices[0].message.content or ""
 
-    def _chat_ollama(self, messages: List[Dict[str, str]]) -> str:
+    def _chat_ollama(self, messages: List[Dict[str, str]], think: bool = False) -> str:
         base_url = self.base_url.rstrip("/")
         parsed_url = urlparse(base_url)
         if parsed_url.path not in ("", "/v1"):
             raise ValueError(
-                "disable_thinking requires an Ollama base URL ending in /v1"
+                "thinking control requires an Ollama base URL ending in /v1"
             )
         if parsed_url.path == "/v1":
             base_url = base_url[:-3]
@@ -179,7 +184,7 @@ class HarnessPlanner:
             "model": self.model_name,
             "messages": messages,
             "stream": False,
-            "think": False,
+            "think": think,
             "options": {
                 "temperature": self.temperature,
                 "num_predict": self.max_tokens,
@@ -192,7 +197,9 @@ class HarnessPlanner:
         )
         with request.urlopen(req, timeout=self.request_timeout) as response:
             result = json.load(response)
-        return result.get("message", {}).get("content", "")
+        message = result.get("message", {})
+        self.last_thinking = message.get("thinking") or None
+        return message.get("content", "")
 
     def act(
         self,

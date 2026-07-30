@@ -460,6 +460,7 @@ class EB_ManipulationHarnessEvaluator:
                     'object_labels': object_labels,
                     'id_to_sim_name': id_to_sim_name,
                     'raw_output': raw_text,
+                    'planner_thinking': getattr(self.planner, 'last_thinking', None),
                     'invocation': invocation,
                     'grounding_frame_id': grounding['frame_id'],
                     'grounding_coordinate_source': grounding['coordinate_source'],
@@ -915,6 +916,7 @@ class EB_ManipulationHarnessEvaluator:
                 temperature=self.config.get('temperature', 0.0),
                 max_tokens=self.config.get('max_tokens', 1024),
                 disable_thinking=self.config.get('disable_thinking', False),
+                enable_thinking=self.config.get('enable_thinking', False),
                 request_timeout=self.config.get('request_timeout', 600.0),
             )
             self._write_run_manifest('running')

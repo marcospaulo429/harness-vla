@@ -185,6 +185,47 @@ def test_planner_can_disable_ollama_thinking():
     assert urlopen.call_args.kwargs["timeout"] == 123
 
 
+def test_planner_can_enable_ollama_thinking():
+    body = (
+        b'{"message":{"thinking":"I should release now.",'
+        b'"content":"{\\"action\\":\\"release\\"}"}}'
+    )
+    response = type("Response", (), {
+        "__enter__": lambda self: self,
+        "__exit__": lambda self, *args: None,
+        "read": lambda self: body,
+    })()
+    planner = HarnessPlanner(
+        model_name="gemma4:12b",
+        base_url="http://localhost:11434/v1",
+        enable_thinking=True,
+        client=_FakeClient("unused"),
+    )
+
+    with patch("embodiedbench.planner.harness.harness_planner.request.urlopen", return_value=response) as urlopen:
+        invocation, raw = planner.act("x", {}, [0, 0, 0, 0, 0, 0, 1], [])
+
+    assert invocation["action"] == "release"
+    assert raw == '{"action":"release"}'
+    assert planner.last_thinking == "I should release now."
+    sent = json.loads(urlopen.call_args.args[0].data)
+    assert sent["think"] is True
+
+
+def test_thinking_modes_are_mutually_exclusive():
+    try:
+        HarnessPlanner(
+            model_name="gemma4:12b",
+            disable_thinking=True,
+            enable_thinking=True,
+            client=_FakeClient("unused"),
+        )
+    except ValueError as error:
+        assert "mutually exclusive" in str(error)
+    else:
+        raise AssertionError("expected ValueError")
+
+
 def test_disable_ollama_thinking_rejects_incompatible_url_path():
     planner = HarnessPlanner(
         model_name="gemma4:12b",

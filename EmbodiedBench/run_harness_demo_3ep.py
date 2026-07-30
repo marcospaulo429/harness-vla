@@ -18,16 +18,23 @@ from embodiedbench.evaluator.eb_manipulation_harness_evaluator import (
 
 
 SELECTED = [0, 15, 38]
-EXPERIMENT = f"harness_demo_3ep_{datetime.now():%Y%m%d_%H%M%S}"
-MODEL = sys.argv[1] if len(sys.argv) > 1 else 'qwen2.5:0.5b-instruct'
+THINK = '--think' in sys.argv
+EXPERIMENT = (
+    f"harness_demo_3ep_{'think_' if THINK else ''}{datetime.now():%Y%m%d_%H%M%S}"
+)
+MODEL = next(
+    (arg for arg in sys.argv[1:] if not arg.startswith('--')),
+    'qwen2.5:0.5b-instruct',
+)
 
 config = {
     'model_name': MODEL,
     'base_url': 'http://localhost:11434/v1',
     'api_key': 'ollama',
     'temperature': 0.0,
-    'max_tokens': 1024,
-    'disable_thinking': MODEL.startswith('gemma4:'),
+    'max_tokens': 2048 if THINK else 1024,
+    'disable_thinking': MODEL.startswith('gemma4:') and not THINK,
+    'enable_thinking': THINK,
     'down_sample_ratio': 1.0,
     'selected_indexes': SELECTED,
     'eval_sets': ['base'],
