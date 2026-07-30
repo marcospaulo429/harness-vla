@@ -32,7 +32,10 @@ config = {
     'base_url': 'http://localhost:11434/v1',
     'api_key': 'ollama',
     'temperature': 0.0,
-    'max_tokens': 2048 if THINK else 1024,
+    # Thinking turns were observed truncating mid-reasoning at 2048 tokens
+    # (thinking consumed the whole budget and no JSON was emitted), so the
+    # think-mode ceiling leaves room for reasoning plus the final invocation.
+    'max_tokens': 8192 if THINK else 1024,
     'disable_thinking': MODEL.startswith('gemma4:') and not THINK,
     'enable_thinking': THINK,
     'down_sample_ratio': 1.0,
