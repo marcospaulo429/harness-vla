@@ -14,6 +14,13 @@ perder resultados, misturar causas ou sobrecarregar o contexto do orquestrador.
 
 ### Gate obrigatório de fidelidade científica
 
+**Restrição vigente: só é permitido implementar mecanismos que o paper
+(arXiv:2607.08448v2) descreve.** Extensões fora do paper estão proibidas até
+que os componentes publicados estejam completos e as tarefas do benchmark
+sejam resolvidas com eles. Instrumentação de auditoria e adaptação mínima ao
+benchmark (`paper-compatible`) são aceitas; novas primitivas, heurísticas de
+política ou skills fora do vocabulário publicado não são.
+
 Antes de cada feature, consulte arXiv:2607.08448v2 e registre:
 
 - seção/apêndice que descreve a ideia;
