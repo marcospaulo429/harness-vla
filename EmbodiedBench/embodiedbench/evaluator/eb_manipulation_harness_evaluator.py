@@ -17,6 +17,7 @@ Beta scope (see ``docs/HARNESS_VLA_NOT_IMPLEMENTED.md``):
 import os
 import copy
 import json
+import socket
 from datetime import datetime, timezone
 
 import numpy as np
@@ -463,12 +464,29 @@ class EB_ManipulationHarnessEvaluator:
 
             while not done and turn < self.max_turns:
                 turn += 1
-                invocation, raw_text = self._planner_act(
-                    user_instruction, avg_obj_coord, pose.as_action(), history,
-                    object_roles, object_labels,
-                    held_object_id=held_object_id,
-                    attachment_evidence_available=held_evidence_available,
-                )
+                try:
+                    invocation, raw_text = self._planner_act(
+                        user_instruction, avg_obj_coord, pose.as_action(), history,
+                        object_roles, object_labels,
+                        held_object_id=held_object_id,
+                        attachment_evidence_available=held_evidence_available,
+                    )
+                except (socket.timeout, TimeoutError, OSError) as error:
+                    feedback = f'Planner request failed ({type(error).__name__}: {error}). Retrying next turn.'
+                    logger.warning(feedback)
+                    self._record_trace(trace, {
+                        'turn': turn,
+                        'pose_before': pose.as_action(),
+                        'status': 'planner_request_error',
+                        'feedback': feedback,
+                        'invocation': None,
+                    })
+                    history.append({
+                        'action': None,
+                        'status': 'planner_request_error',
+                        'feedback': feedback,
+                    })
+                    continue
                 record = {
                     'turn': turn,
                     'pose_before': pose.as_action(),
