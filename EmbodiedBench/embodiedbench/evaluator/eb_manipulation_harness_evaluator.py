@@ -53,6 +53,7 @@ from embodiedbench.planner.harness.primitives import (
     classify_spatial_postcondition,
     pose_from_observation,
     primitive_termination,
+    reconcile_held_object,
     summarize_physical_state,
 )
 from embodiedbench.planner.harness.openvla_backend import (
@@ -276,16 +277,29 @@ class EB_ManipulationHarnessEvaluator:
         image.save(overlay_path)
         return sidecar_path
 
-    def _planner_act(self, instruction, coords, pose, history, roles, labels):
+    def _planner_act(
+        self, instruction, coords, pose, history, roles, labels,
+        held_object_id=None, attachment_evidence_available=False,
+    ):
         try:
             return self.planner.act(
                 instruction, coords, pose, history,
                 object_roles=roles, object_labels=labels,
+                held_object_id=held_object_id,
+                attachment_evidence_available=attachment_evidence_available,
             )
         except TypeError as exc:
             if 'unexpected keyword argument' not in str(exc):
                 raise
-            return self.planner.act(instruction, coords, pose, history)
+            try:
+                return self.planner.act(
+                    instruction, coords, pose, history,
+                    object_roles=roles, object_labels=labels,
+                )
+            except TypeError as fallback_exc:
+                if 'unexpected keyword argument' not in str(fallback_exc):
+                    raise
+                return self.planner.act(instruction, coords, pose, history)
 
     def _current_pose(self, obs):
         pose = pose_from_observation(obs)
@@ -440,6 +454,7 @@ class EB_ManipulationHarnessEvaluator:
             self.planner.reset()
             history = []
             held_object_id = None
+            held_evidence_available = False
             placed_object_ids = set()
             no_progress_guard = NoProgressGuard(limit=3)
             done = False
@@ -451,6 +466,8 @@ class EB_ManipulationHarnessEvaluator:
                 invocation, raw_text = self._planner_act(
                     user_instruction, avg_obj_coord, pose.as_action(), history,
                     object_roles, object_labels,
+                    held_object_id=held_object_id,
+                    attachment_evidence_available=held_evidence_available,
                 )
                 record = {
                     'turn': turn,
@@ -558,6 +575,9 @@ class EB_ManipulationHarnessEvaluator:
                     destination_id = invocation.get('destination')
                     attachments = openvla['attachments']
                     attachment_available = openvla['attachment_available']
+                    held_object_id, held_evidence_available = reconcile_held_object(
+                        held_object_id, attachments, attachment_available, id_to_sim_name
+                    )
                     spatial_postcondition = None
                     grasp_outcome = None
                     release_executed = bool(
@@ -797,6 +817,12 @@ class EB_ManipulationHarnessEvaluator:
                 )
                 if detached:
                     held_object_id = None
+                held_object_id, held_evidence_available = reconcile_held_object(
+                    held_object_id,
+                    step_results[-1]['grasped_objects'] if step_results else [],
+                    attachment_evidence_available,
+                    id_to_sim_name,
+                )
                 if spatial_postcondition is not None:
                     distance = spatial_postcondition['distance']
                     distance_text = 'unknown' if distance is None else f'{distance:.3f}'

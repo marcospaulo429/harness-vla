@@ -258,6 +258,45 @@ def test_turn_prompt_separates_roles_and_uses_labels_without_color_claims():
     assert "color" not in prompt.lower()
 
 
+def test_turn_prompt_reports_authoritative_attachment_state():
+    held = build_turn_prompt(
+        "move the cube",
+        {"object 1": [1, 2, 3]},
+        [0, 0, 0, 0, 0, 0, 0],
+        [],
+        held_object_id="object 1",
+        attachment_evidence_available=True,
+    )
+    assert "Currently attached object (authoritative simulator state): object 1" in held
+    assert "Keep the gripper closed during transport" in held
+
+    empty = build_turn_prompt(
+        "move the cube",
+        {"object 1": [1, 2, 3]},
+        [0, 0, 0, 0, 0, 0, 1],
+        [],
+        held_object_id=None,
+        attachment_evidence_available=True,
+    )
+    assert "authoritative simulator state): none" in empty
+
+    no_evidence = build_turn_prompt(
+        "move the cube",
+        {"object 1": [1, 2, 3]},
+        [0, 0, 0, 0, 0, 0, 1],
+        [],
+        held_object_id="object 1",
+        attachment_evidence_available=False,
+    )
+    assert "authoritative simulator state" not in no_evidence
+
+
+def test_seed_failure_models_cover_transport_detach():
+    joined = " ".join(SEED_FAILURE_MODELS).lower()
+    assert "detach during transport" in joined
+    assert "gripper=\"close\"" in " ".join(SEED_FAILURE_MODELS)
+
+
 def test_planner_reset():
     planner = _planner("garbage")
     planner.act("x", {}, [0, 0, 0, 0, 0, 0, 1], [])

@@ -12,6 +12,7 @@ from embodiedbench.planner.harness.primitives import (
     classify_grasp_outcome,
     classify_spatial_postcondition,
     primitive_termination,
+    reconcile_held_object,
     summarize_physical_state,
 )
 
@@ -356,6 +357,33 @@ def test_physical_state_tracks_only_verified_manipulable_objects():
         "placed": ["object 1"],
         "remaining": [],
     }
+
+
+ID_TO_SIM = {"object 1": "star_visual", "object 2": "cube_visual"}
+
+
+def test_reconcile_clears_stale_held_object_after_detach():
+    held, available = reconcile_held_object("object 1", [], True, ID_TO_SIM)
+    assert held is None
+    assert available is True
+
+
+def test_reconcile_keeps_held_object_while_attached():
+    held, available = reconcile_held_object("object 1", ["star"], True, ID_TO_SIM)
+    assert held == "object 1"
+    assert available is True
+
+
+def test_reconcile_adopts_attached_object_when_untracked():
+    held, available = reconcile_held_object(None, ["cube"], True, ID_TO_SIM)
+    assert held == "object 2"
+    assert available is True
+
+
+def test_reconcile_without_evidence_preserves_tracking():
+    held, available = reconcile_held_object("object 1", [], False, ID_TO_SIM)
+    assert held == "object 1"
+    assert available is False
 
 
 @pytest.mark.parametrize(

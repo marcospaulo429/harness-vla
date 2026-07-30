@@ -266,6 +266,34 @@ def summarize_physical_state(
     }
 
 
+def reconcile_held_object(
+    held_object_id: Optional[str],
+    attachments: Sequence[str],
+    attachment_available: bool,
+    id_to_sim_name: Dict[str, str],
+) -> Tuple[Optional[str], bool]:
+    """Re-read authoritative attachment state after a primitive executes.
+
+    Returns ``(held_object_id, evidence_available)``. When attachment evidence
+    is available, the tracked held object must correspond to a currently
+    attached body; otherwise it is cleared (a detach happened). If nothing is
+    tracked but an attachment exists, the matching object ID is adopted.
+    """
+    if not attachment_available:
+        return held_object_id, False
+    attached_physical = {_physical_object_name(name) for name in attachments}
+    if held_object_id is not None:
+        sim_name = id_to_sim_name.get(held_object_id)
+        if sim_name is None or _physical_object_name(sim_name) not in attached_physical:
+            held_object_id = None
+    if held_object_id is None and attached_physical:
+        for object_id in sorted(id_to_sim_name):
+            if _physical_object_name(id_to_sim_name[object_id]) in attached_physical:
+                held_object_id = object_id
+                break
+    return held_object_id, True
+
+
 def primitive_termination(
     mode: Optional[str],
     grasp_outcome: Optional[str] = None,

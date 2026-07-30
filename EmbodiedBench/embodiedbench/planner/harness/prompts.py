@@ -122,6 +122,8 @@ def build_turn_prompt(
     max_history: int = 8,
     object_roles: Optional[Dict[str, Sequence[str]]] = None,
     object_labels: Optional[Dict[str, str]] = None,
+    held_object_id: Optional[str] = None,
+    attachment_evidence_available: bool = False,
 ) -> str:
     """Assemble the per-turn user message.
 
@@ -133,6 +135,17 @@ def build_turn_prompt(
     lines.append("")
     lines.append("Current end-effector pose [X, Y, Z, Roll, Pitch, Yaw, Gripper]:")
     lines.append(f"  {list(pose_action)}")
+    if attachment_evidence_available:
+        if held_object_id:
+            lines.append(
+                f"Currently attached object (authoritative simulator state): {held_object_id}. "
+                "Keep the gripper closed during transport; opening it detaches the object."
+            )
+        else:
+            lines.append(
+                "Currently attached object (authoritative simulator state): none. "
+                "No object is held; a verified grasp is required before any place."
+            )
     lines.append("")
     lines.append("Manipulable candidates (planner ID, voxel coords, optional label):")
     lines.append(_format_candidates(object_coords, object_roles, object_labels, "manipulable"))

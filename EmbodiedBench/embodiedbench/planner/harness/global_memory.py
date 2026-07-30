@@ -43,6 +43,11 @@ SEED_FAILURE_MODELS: List[str] = [
     "Unstable staging: if the pre-contact pose does not expose the target in a "
     "reachable configuration, adjust position/orientation with analytic primitives "
     "before invoking vla_act.",
+    "Detach during transport: commanding the gripper open (gripper=\"open\" or "
+    "release) while holding an object detaches it immediately and the object is "
+    "left behind. After a verified grasp, transport with move_to using "
+    "gripper=\"close\" (or omit gripper) and open the gripper only at the "
+    "destination via release or vla_act place.",
 ]
 
 
