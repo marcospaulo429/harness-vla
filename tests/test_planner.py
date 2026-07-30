@@ -300,6 +300,12 @@ def test_seed_failure_models_cover_transport_detach():
     assert "gripper=\"close\"" in " ".join(SEED_FAILURE_MODELS)
 
 
+def test_seed_failure_models_cover_repeated_grasp_pose():
+    joined = " ".join(SEED_FAILURE_MODELS).lower()
+    assert "repeated grasp at the same pose" in joined
+    assert "rotate_wrist" in joined
+
+
 def test_planner_reset():
     planner = _planner("garbage")
     planner.act("x", {}, [0, 0, 0, 0, 0, 0, 1], [])

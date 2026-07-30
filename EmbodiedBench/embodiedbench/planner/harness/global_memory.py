@@ -48,6 +48,11 @@ SEED_FAILURE_MODELS: List[str] = [
     "left behind. After a verified grasp, transport with move_to using "
     "gripper=\"close\" (or omit gripper) and open the gripper only at the "
     "destination via release or vla_act place.",
+    "Repeated grasp at the same pose: if a grasp attempt fails (empty_grasp or "
+    "grasp_unverified), do NOT retry the identical approach. Re-stage first: "
+    "change the wrist orientation with rotate_wrist and/or approach the target "
+    "from a different offset with move_to, then retry vla_act grasp. Repeating "
+    "the same pose reproduces the same failed contact geometry.",
 ]
 
 
