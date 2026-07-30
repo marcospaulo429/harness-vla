@@ -118,6 +118,7 @@ class HarnessPlanner:
         global_memory: Optional[GlobalMemory] = None,
         temperature: float = 0.0,
         max_tokens: int = 1024,
+        num_ctx: Optional[int] = None,
         disable_thinking: bool = False,
         enable_thinking: bool = False,
         request_timeout: float = 600.0,
@@ -134,6 +135,7 @@ class HarnessPlanner:
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY") or "ollama"
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.num_ctx = num_ctx
         self.disable_thinking = disable_thinking
         self.enable_thinking = enable_thinking
         self.last_thinking: Optional[str] = None
@@ -180,15 +182,18 @@ class HarnessPlanner:
             )
         if parsed_url.path == "/v1":
             base_url = base_url[:-3]
+        payload_options = {
+            "temperature": self.temperature,
+            "num_predict": self.max_tokens,
+        }
+        if self.num_ctx is not None:
+            payload_options["num_ctx"] = self.num_ctx
         payload = json.dumps({
             "model": self.model_name,
             "messages": messages,
             "stream": False,
             "think": think,
-            "options": {
-                "temperature": self.temperature,
-                "num_predict": self.max_tokens,
-            },
+            "options": payload_options,
         }).encode("utf-8")
         req = request.Request(
             f"{base_url}/api/chat",

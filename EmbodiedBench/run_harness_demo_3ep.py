@@ -35,7 +35,10 @@ config = {
     # Thinking turns were observed truncating mid-reasoning at 2048 tokens
     # (thinking consumed the whole budget and no JSON was emitted), so the
     # think-mode ceiling leaves room for reasoning plus the final invocation.
+    # num_ctx must also grow: Ollama's default 4096-token window caps
+    # prompt+thinking+output regardless of num_predict.
     'max_tokens': 8192 if THINK else 1024,
+    'num_ctx': 16384 if THINK else None,
     'disable_thinking': MODEL.startswith('gemma4:') and not THINK,
     'enable_thinking': THINK,
     'down_sample_ratio': 1.0,

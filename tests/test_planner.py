@@ -181,6 +181,7 @@ def test_planner_can_disable_ollama_thinking():
     sent = json.loads(urlopen.call_args.args[0].data)
     assert sent["think"] is False
     assert sent["options"]["num_predict"] == 1024
+    assert "num_ctx" not in sent["options"]
     assert urlopen.call_args.args[0].full_url == "http://localhost:11434/api/chat"
     assert urlopen.call_args.kwargs["timeout"] == 123
 
@@ -199,6 +200,7 @@ def test_planner_can_enable_ollama_thinking():
         model_name="gemma4:12b",
         base_url="http://localhost:11434/v1",
         enable_thinking=True,
+        num_ctx=16384,
         client=_FakeClient("unused"),
     )
 
@@ -210,6 +212,7 @@ def test_planner_can_enable_ollama_thinking():
     assert planner.last_thinking == "I should release now."
     sent = json.loads(urlopen.call_args.args[0].data)
     assert sent["think"] is True
+    assert sent["options"]["num_ctx"] == 16384
 
 
 def test_thinking_modes_are_mutually_exclusive():
