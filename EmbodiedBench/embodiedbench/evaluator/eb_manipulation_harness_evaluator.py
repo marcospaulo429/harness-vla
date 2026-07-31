@@ -650,6 +650,11 @@ class EB_ManipulationHarnessEvaluator:
                         step_results[-1]['env_feedback']
                         if step_results else 'OpenVLA executed no actions'
                     )
+                    if mode == 'place' and primitive_postcondition_met and not done:
+                        feedback += (
+                            " Benchmark task signal: NOT successful yet - the placement "
+                            "did not complete the task. The task is unfinished; keep acting."
+                        )
                     no_progress_guard.observe_execution(invocation, step_results)
                     record.update({
                         'backend': 'openvla_http',
@@ -855,6 +860,12 @@ class EB_ManipulationHarnessEvaluator:
                     feedback = (
                         f"Release outcome: {termination_reason}; detached={detached}. "
                         f"action execution: {execution_status}."
+                    )
+                if mode == 'place' and primitive_postcondition_met and not done:
+                    feedback += (
+                        " Benchmark task signal: NOT successful yet - the placement "
+                        "did not complete the task. The task is unfinished; keep acting "
+                        "(e.g. verify the placement or continue with the next object)."
                     )
                 physical_state = summarize_physical_state(
                     object_roles, held_object_id, placed_object_ids
