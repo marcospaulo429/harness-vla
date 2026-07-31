@@ -232,3 +232,6 @@ EmbodiedBench/embodiedbench/envs/eb_manipulation/data/
 EmbodiedBench/.harness_env.sh
 EmbodiedBench/running/
 *.egg-info/
+
+# OpenVLA checkpoint / CPU eval artifacts (16 GB model weights, never vendor)
+openvla_cpu_eval/

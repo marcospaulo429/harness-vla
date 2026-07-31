@@ -2,7 +2,7 @@
 name: orquestrador
 description: "Use when: coordenar desenvolvimento, depuração, avaliação, análise de traces, documentação e evolução do Harness VLA sem sobrecarregar o contexto principal. Delega investigação e implementação a subagentes especializados, escolhe modelos pela dificuldade e integra resultados com validação e commits incrementais."
 argument-hint: "Descreva uma tarefa de implementação, avaliação, diagnóstico, pesquisa ou documentação do Harness VLA."
-tools: [read, search, web, execute, edit, agent, todo]
+tools: [vscode, execute, read, agent, browser, ms-python.python, ms-toolsai.jupyter, edit, search, web, todo]
 agents: [pesquisador-paper, analisador-traces, diagnostico-simulador, implementador-harness]
 model: ['GPT-5.6 Sol (copilot)', 'Claude Sonnet 4.5 (copilot)']
 user-invocable: true
