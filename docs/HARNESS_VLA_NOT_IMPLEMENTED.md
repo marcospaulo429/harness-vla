@@ -60,9 +60,10 @@ read-only deployment remain **not implemented**. The evaluated planner is
 therefore still zero-shot.
 
 ### 3. Automatic Global Memory updates
-Global Memory is a **static hand-written seed**. The paper distills success rules
-and failure models from execution traces over time; here nothing is learned or
-written back.
+Global Memory used by the planner remains a **static hand-written seed**. An
+offline ledger now records trace-backed success/failure candidates with provenance,
+idempotent deduplication and read-only deployment guards. Agent interpretation,
+promotion into the planner memory and iterative write-back are still not implemented.
 
 ### 4. Multimodal / visual perception
 The beta is **language-only**: it consumes the object coordinate table as text and

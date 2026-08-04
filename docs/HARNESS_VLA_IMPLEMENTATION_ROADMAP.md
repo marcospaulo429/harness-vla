@@ -80,6 +80,11 @@
 - **Fonte:** §2.2, Apêndices A e E.4.
 - **Objetivo:** candidatos com provenance, deduplicação e memória congelada em deployment.
 - **Aceitação:** nenhuma regra sem trace de evidência; atualização idempotente.
+- **Estado:** ledger offline de candidatos concluído; exige run/JSONL completos,
+  referencia turns por hash, deduplica de forma idempotente e bloqueia escrita em
+  deployment. Interpretação e promoção pelo agente permanecem pendentes; a extração
+  estruturada de pós-condições é instrumentação `paper-compatible`, não algoritmo
+  de promoção especificado pelo paper.
 
 ### M8 — REPL mediado por arquivos
 

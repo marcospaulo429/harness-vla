@@ -14,7 +14,12 @@ from embodiedbench.planner.harness.primitives import (
     PrimitiveError,
     PoseState,
 )
-from embodiedbench.planner.harness.global_memory import GlobalMemory
+from embodiedbench.planner.harness.global_memory import (
+    GlobalMemory,
+    GlobalMemoryEvidence,
+    GlobalMemoryLedger,
+    evidence_from_completed_trace,
+)
 from embodiedbench.planner.harness.vla_runtime import (
     VLABackend,
     VLAChunkRecord,
@@ -27,6 +32,9 @@ __all__ = [
     "PrimitiveError",
     "PoseState",
     "GlobalMemory",
+    "GlobalMemoryEvidence",
+    "GlobalMemoryLedger",
+    "evidence_from_completed_trace",
     "VLABackend",
     "VLAChunkRecord",
     "VLARuntime",

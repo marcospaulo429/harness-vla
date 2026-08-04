@@ -14,8 +14,12 @@ from __future__ import annotations
 
 import json
 import os
+import hashlib
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List
+
+from embodiedbench.planner.harness.trace_io import load_complete_jsonl, write_json_atomic
 
 
 # Manual seed rules, adapted from the Harness VLA paper (Appendix A). These are
@@ -106,3 +110,125 @@ class GlobalMemory:
         for i, fm in enumerate(self.failure_models, 1):
             lines.append(f"  {i}. {fm}")
         return "\n".join(lines)
+
+
+@dataclass(frozen=True)
+class GlobalMemoryEvidence:
+    """A trace-backed candidate, not an automatically promoted memory entry."""
+
+    kind: str
+    text: str
+    trace_sha256: str
+    turns: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        if self.kind not in {"success_rule", "failure_model"}:
+            raise ValueError("evidence kind must be success_rule or failure_model")
+        if not self.text.strip():
+            raise ValueError("evidence text must be non-empty")
+        if len(self.trace_sha256) != 64 or any(
+            character not in "0123456789abcdef" for character in self.trace_sha256
+        ):
+            raise ValueError("trace_sha256 must be a SHA-256 hex digest")
+        if not self.turns or any(
+            isinstance(turn, bool) or not isinstance(turn, int) or turn <= 0
+            for turn in self.turns
+        ):
+            raise ValueError("evidence must reference positive trace turns")
+
+    @property
+    def identity(self) -> str:
+        payload = json.dumps(
+            {
+                "kind": self.kind,
+                "text": " ".join(self.text.split()),
+                "trace_sha256": self.trace_sha256,
+                "turns": list(self.turns),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.identity,
+            "kind": self.kind,
+            "text": self.text,
+            "trace_sha256": self.trace_sha256,
+            "turns": list(self.turns),
+        }
+
+
+@dataclass
+class GlobalMemoryLedger:
+    """Persist trace-backed memory candidates without silently promoting them."""
+
+    evidence: List[GlobalMemoryEvidence] = field(default_factory=list)
+    read_only: bool = False
+
+    @classmethod
+    def load(cls, path: str, *, read_only: bool = False) -> "GlobalMemoryLedger":
+        ledger_path = Path(path)
+        if not ledger_path.exists():
+            return cls(read_only=read_only)
+        data = json.loads(ledger_path.read_text(encoding="utf-8"))
+        evidence = [
+            GlobalMemoryEvidence(
+                kind=item["kind"],
+                text=item["text"],
+                trace_sha256=item["trace_sha256"],
+                turns=tuple(item["turns"]),
+            )
+            for item in data.get("evidence", [])
+        ]
+        return cls(evidence=evidence, read_only=read_only)
+
+    def add(self, candidate: GlobalMemoryEvidence) -> bool:
+        if self.read_only:
+            raise PermissionError("deployment Global Memory ledger is read-only")
+        if any(existing.identity == candidate.identity for existing in self.evidence):
+            return False
+        self.evidence.append(candidate)
+        self.evidence.sort(key=lambda item: item.identity)
+        return True
+
+    def save(self, path: str) -> None:
+        if self.read_only:
+            raise PermissionError("deployment Global Memory ledger is read-only")
+        write_json_atomic(path, {"evidence": [item.to_dict() for item in self.evidence]})
+
+
+def evidence_from_completed_trace(
+    path: str, *, run_status: str
+) -> List[GlobalMemoryEvidence]:
+    """Extract structured candidates; promotion remains an explicit later decision."""
+    if run_status != "completed":
+        raise ValueError("only a completed run can produce Global Memory evidence")
+    trace_path = Path(path)
+    payload = trace_path.read_bytes()
+    if payload and not payload.endswith(b"\n"):
+        raise ValueError("incomplete trace cannot produce Global Memory evidence")
+    records = load_complete_jsonl(trace_path)
+    if not records:
+        raise ValueError("empty trace cannot produce Global Memory evidence")
+    trace_sha256 = hashlib.sha256(payload).hexdigest()
+    candidates = []
+    for index, record in enumerate(records, 1):
+        reason = record.get("termination_reason")
+        primitive = record.get("primitive", "primitive")
+        if record.get("primitive_postcondition_met") is False and reason:
+            candidates.append(GlobalMemoryEvidence(
+                kind="failure_model",
+                text=f"{primitive} ended with failed postcondition: {reason}.",
+                trace_sha256=trace_sha256,
+                turns=(int(record.get("turn", index)),),
+            ))
+        elif record.get("primitive_postcondition_met") is True:
+            candidates.append(GlobalMemoryEvidence(
+                kind="success_rule",
+                text=f"{primitive} satisfied its postcondition in the recorded physical state.",
+                trace_sha256=trace_sha256,
+                turns=(int(record.get("turn", index)),),
+            ))
+    return candidates
