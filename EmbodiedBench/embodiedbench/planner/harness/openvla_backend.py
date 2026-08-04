@@ -99,7 +99,11 @@ def convert_libero_delta_to_eb(
     gripper_convention: str,
     rotation_frame: str,
 ) -> list[int]:
-    """Compose one LIBERO delta with a live ``[xyz, quat]`` into EB bins."""
+    """Compose one LIBERO delta with a live ``[xyz, quat]`` into EB bins.
+
+    Raw deltas are normalized OSC commands in [-1, 1]; robosuite scales them
+    by output_max (max_delta_xyz meters, max_delta_rotation radians).
+    """
     if len(raw_delta) != 7 or len(gripper_pose) < 7:
         raise OpenVLABackendError("action and gripper_pose must have 7 values")
     pose = np.asarray(gripper_pose[:7], dtype=float)
@@ -107,8 +111,8 @@ def convert_libero_delta_to_eb(
         raise OpenVLABackendError("gripper_pose must contain finite values")
     bounds = np.asarray(workspace_bounds, dtype=float)
 
-    delta_xyz = np.clip(
-        np.asarray(raw_delta[:3], dtype=float), -max_delta_xyz, max_delta_xyz
+    delta_xyz = (
+        np.clip(np.asarray(raw_delta[:3], dtype=float), -1.0, 1.0) * max_delta_xyz
     )
     target_xyz = np.clip(pose[:3] + delta_xyz, bounds[:3], bounds[3:])
     resolution = (bounds[3:] - bounds[:3]) / VOXEL_SIZE
@@ -118,10 +122,10 @@ def convert_libero_delta_to_eb(
         VOXEL_SIZE - 1,
     )
 
-    delta_rotvec = np.asarray(raw_delta[3:6], dtype=float)
-    angle = float(np.linalg.norm(delta_rotvec))
-    if angle > max_delta_rotation:
-        delta_rotvec *= max_delta_rotation / angle
+    delta_rotvec = (
+        np.clip(np.asarray(raw_delta[3:6], dtype=float), -1.0, 1.0)
+        * max_delta_rotation
+    )
     current_rotation = _normalized_quaternion(pose[3:7])
     delta_rotation = _rotvec_to_quaternion(delta_rotvec)
     target_rotation = (

@@ -90,10 +90,10 @@ def test_axis_angle_is_composed_with_live_quaternion_in_local_frame():
     current = [np.sin(half_angle), 0, 0, np.cos(half_angle)]
     pose = [0.2, 0.0, 1.0, *current]
     backend = OpenVLAHTTPBackend(
-        "http://fake", max_delta_rotation=2, transport=lambda *_: {}
+        "http://fake", max_delta_rotation=np.pi / 6, transport=lambda *_: {}
     )
 
-    converted = backend.convert_action([0, 0, 0, np.pi / 6, 0, 0, -1], pose)
+    converted = backend.convert_action([0, 0, 0, 1, 0, 0, -1], pose)
     assert converted[3:6] == [100, 60, 60]
 
 
