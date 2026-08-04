@@ -9,10 +9,12 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 
-from PIL import Image
-
 from embodiedbench.evaluator.eb_manipulation_harness_evaluator import (
     EB_ManipulationHarnessEvaluator,
+)
+from embodiedbench.evaluator.run_artifacts import (
+    create_episode_gifs,
+    create_run_root,
 )
 
 
@@ -26,7 +28,7 @@ def parse_args():
     parser.add_argument('--planner-base-url', default='http://localhost:11434/v1')
     parser.add_argument(
         '--output-root',
-        default='/home/marcos/harness-vla/openvla_cpu_eval',
+        default=str(Path(__file__).resolve().parents[1] / 'evaluation_runs'),
     )
     parser.add_argument('--max-chunks', type=int, default=8)
     parser.add_argument('--max-delta-xyz', type=float, default=0.05)
@@ -41,31 +43,10 @@ def parse_args():
     return parser.parse_args()
 
 
-def create_episode_gifs(log_path):
-    for episode_dir in sorted((Path(log_path) / 'images').glob('episode_*')):
-        image_paths = sorted(
-            episode_dir.glob('*_front_rgb.png'),
-            key=lambda path: int(path.name.split('_step_')[1].split('_')[0]),
-        )
-        frames = []
-        for image_path in image_paths:
-            with Image.open(image_path) as image:
-                frames.append(image.convert('RGB'))
-        if frames:
-            gif_path = episode_dir / f'{episode_dir.name}.gif'
-            frames[0].save(
-                gif_path,
-                save_all=True,
-                append_images=frames[1:],
-                duration=700,
-                loop=0,
-            )
-            print(f'GIF: {gif_path}')
-
-
 def main():
     args = parse_args()
     experiment = f'openvla_cpu_{len(args.selected_indexes)}ep_{datetime.now():%Y%m%d_%H%M%S}'
+    run_root = create_run_root(args.output_root, experiment)
     config = {
         'model_name': args.planner_model,
         'base_url': args.planner_base_url,
@@ -79,7 +60,7 @@ def main():
         'resolution': 256,
         'language_only': 1,
         'exp_name': experiment,
-        'output_root': args.output_root,
+        'run_root': str(run_root),
         'max_turns': 12,
         'max_env_steps': 30,
         'move_to_tolerance': 2.0,
@@ -100,9 +81,12 @@ def main():
     }
     evaluator = EB_ManipulationHarnessEvaluator(config)
     evaluator.check_config_valid()
-    evaluator.evaluate_main()
-    create_episode_gifs(evaluator.log_path)
-    print(f'DONE: {evaluator.log_path}')
+    try:
+        evaluator.evaluate_main()
+    finally:
+        for gif_path in create_episode_gifs(evaluator.log_path, run_root):
+            print(f'GIF: {gif_path}')
+        print(f'ARTIFACTS: {run_root}')
 
 
 if __name__ == '__main__':

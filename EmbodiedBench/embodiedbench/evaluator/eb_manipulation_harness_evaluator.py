@@ -949,10 +949,14 @@ class EB_ManipulationHarnessEvaluator:
             real_model_name = self.model_name.split('/')[-1] if '/' in self.model_name else self.model_name
             real_model_name = real_model_name.replace(':', '_')
             exp = self.config.get('exp_name') or 'harness'
-            output_root = self.config.get('output_root') or 'running/eb_manipulation_harness'
-            self.log_path = os.path.join(
-                output_root, real_model_name, exp, self.eval_set
-            )
+            run_root = self.config.get('run_root')
+            if run_root:
+                self.log_path = os.path.join(run_root, self.eval_set)
+            else:
+                output_root = self.config.get('output_root') or 'running/eb_manipulation_harness'
+                self.log_path = os.path.join(
+                    output_root, real_model_name, exp, self.eval_set
+                )
             self.env = EBManEnv(
                 eval_set=self.eval_set,
                 render_mode=self.config.get('render_mode', 'human'),

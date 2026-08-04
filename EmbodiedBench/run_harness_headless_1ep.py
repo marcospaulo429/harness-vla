@@ -1,13 +1,19 @@
 """Run one fixed headless episode to diagnose grounding and grasp feedback."""
 
 from datetime import datetime
+from pathlib import Path
 import sys
 
 from embodiedbench.evaluator.eb_manipulation_harness_evaluator import (
     EB_ManipulationHarnessEvaluator,
 )
+from embodiedbench.evaluator.run_artifacts import (
+    create_episode_gifs,
+    create_run_root,
+)
 
 MODEL = sys.argv[1] if len(sys.argv) > 1 else 'qwen2.5:0.5b-instruct'
+EXPERIMENT = f"harness_grounding_grasp_1ep_{datetime.now():%Y%m%d_%H%M%S}"
 
 config = {
     'model_name': MODEL,
@@ -21,7 +27,7 @@ config = {
     'eval_sets': ['base'],
     'resolution': 256,
     'language_only': 1,
-    'exp_name': f"harness_grounding_grasp_1ep_{datetime.now():%Y%m%d_%H%M%S}",
+    'exp_name': EXPERIMENT,
     'max_turns': 12,
     'max_env_steps': 30,
     'approach_dz': 8,
@@ -39,7 +45,14 @@ config = {
 
 
 if __name__ == '__main__':
+    runs_root = Path(__file__).resolve().parents[1] / 'evaluation_runs'
+    run_root = create_run_root(runs_root, EXPERIMENT)
+    config['run_root'] = str(run_root)
     evaluator = EB_ManipulationHarnessEvaluator(config)
     evaluator.check_config_valid()
-    evaluator.evaluate_main()
-    print(f'DONE: {evaluator.log_path}')
+    try:
+        evaluator.evaluate_main()
+    finally:
+        for gif_path in create_episode_gifs(evaluator.log_path, run_root):
+            print(f'GIF: {gif_path}')
+        print(f'ARTIFACTS: {run_root}')

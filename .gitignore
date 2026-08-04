@@ -231,6 +231,7 @@ EmbodiedBench/embodiedbench/envs/eb_manipulation/PyRep/
 EmbodiedBench/embodiedbench/envs/eb_manipulation/data/
 EmbodiedBench/.harness_env.sh
 EmbodiedBench/running/
+evaluation_runs/
 *.egg-info/
 
 # OpenVLA checkpoint / CPU eval artifacts (16 GB model weights, never vendor)

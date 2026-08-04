@@ -10,10 +10,12 @@ from datetime import datetime
 from pathlib import Path
 import sys
 
-from PIL import Image
-
 from embodiedbench.evaluator.eb_manipulation_harness_evaluator import (
     EB_ManipulationHarnessEvaluator,
+)
+from embodiedbench.evaluator.run_artifacts import (
+    create_episode_gifs,
+    create_run_root,
 )
 
 
@@ -62,32 +64,15 @@ config = {
     'save_images': True,
 }
 
-
-def create_episode_gifs(log_path):
-    image_root = Path(log_path) / 'images'
-    for episode_dir in sorted(image_root.glob('episode_*')):
-        frames = []
-        for image_path in sorted(
-            episode_dir.glob('*.png'),
-            key=lambda path: int(path.name.split('_step_')[1].split('_')[0]),
-        ):
-            with Image.open(image_path) as image:
-                frames.append(image.convert('RGB'))
-        if frames:
-            gif_path = episode_dir / f'{episode_dir.name}.gif'
-            frames[0].save(
-                gif_path,
-                save_all=True,
-                append_images=frames[1:],
-                duration=700,
-                loop=0,
-            )
-            print(f'GIF: {gif_path}')
-
-
 if __name__ == '__main__':
+    runs_root = Path(__file__).resolve().parents[1] / 'evaluation_runs'
+    run_root = create_run_root(runs_root, EXPERIMENT)
+    config['run_root'] = str(run_root)
     evaluator = EB_ManipulationHarnessEvaluator(config)
     evaluator.check_config_valid()
-    evaluator.evaluate_main()
-    create_episode_gifs(evaluator.log_path)
-    print(f'DONE: {evaluator.log_path}')
+    try:
+        evaluator.evaluate_main()
+    finally:
+        for gif_path in create_episode_gifs(evaluator.log_path, run_root):
+            print(f'GIF: {gif_path}')
+        print(f'ARTIFACTS: {run_root}')
