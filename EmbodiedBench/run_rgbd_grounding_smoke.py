@@ -1,7 +1,9 @@
 """Validate RGB-D projection against PyRep point clouds on one observation."""
 
 import copy
+from datetime import datetime
 import json
+from pathlib import Path
 
 import numpy as np
 
@@ -14,20 +16,30 @@ from embodiedbench.envs.eb_manipulation.rgbd_grounding import (
     depth_to_meters,
     pixel_depth_to_world,
 )
+from embodiedbench.evaluator.run_artifacts import (
+    create_episode_gifs,
+    create_run_root,
+)
 
 
 def main():
-    env = EBManEnv(
-        eval_set="base",
-        render_mode="rgb_array",
-        img_size=(256, 256),
-        down_sample_ratio=1.0,
-        selected_indexes=[0],
-        headless=True,
-        log_path="running/rgbd_grounding_smoke",
-    )
+    test_id = f"rgbd_grounding_smoke_{datetime.now():%Y%m%d_%H%M%S}"
+    runs_root = Path(__file__).resolve().parents[1] / "evaluation_runs"
+    run_root = create_run_root(runs_root, test_id)
+    log_path = run_root / "base"
+    env = None
     try:
+        env = EBManEnv(
+            eval_set="base",
+            render_mode="rgb_array",
+            img_size=(256, 256),
+            down_sample_ratio=1.0,
+            selected_indexes=[0],
+            headless=True,
+            log_path=str(log_path),
+        )
         _, observation = env.reset()
+        env.save_image(["front_rgb"])
         obs = vars(copy.deepcopy(observation))
         artifact = form_harness_grounding_artifact_for_input(
             obs, env.task_class, ["front_rgb"]
@@ -64,12 +76,15 @@ def main():
                 "error_m": error_m,
             })
         result = {
+            "test_id": test_id,
             "frame_id": artifact["frame_id"],
             "comparison_count": len(comparisons),
             "max_projection_error_m": max(errors) if errors else None,
             "mean_projection_error_m": float(np.mean(errors)) if errors else None,
             "comparisons": comparisons,
         }
+        with (run_root / "result.json").open("w", encoding="utf-8") as file:
+            json.dump(result, file, indent=2)
         print(json.dumps(result, indent=2))
         if not errors:
             raise RuntimeError("no front-camera object samples were available")
@@ -78,7 +93,11 @@ def main():
                 f"RGB-D projection differs from PyRep by {max(errors):.6g} m"
             )
     finally:
-        env.close()
+        if env is not None:
+            env.close()
+        for gif_path in create_episode_gifs(log_path, run_root):
+            print(f"GIF: {gif_path}")
+        print(f"ARTIFACTS: {run_root}")
 
 
 if __name__ == "__main__":
