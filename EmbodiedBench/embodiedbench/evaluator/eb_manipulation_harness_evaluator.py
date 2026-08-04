@@ -17,6 +17,7 @@ Beta scope (see ``docs/HARNESS_VLA_NOT_IMPLEMENTED.md``):
 import os
 import copy
 import json
+import math
 import socket
 from datetime import datetime, timezone
 
@@ -61,6 +62,12 @@ from embodiedbench.planner.harness.openvla_backend import (
     OpenVLABackendError,
     OpenVLAHTTPBackend,
     OpenVLAObservation,
+    convert_libero_delta_to_eb,
+)
+from embodiedbench.planner.harness.pirlinf_backend import (
+    PiRLinfBackendError,
+    PiRLinfObservation,
+    PiRLinfWebsocketBackend,
 )
 from embodiedbench.planner.harness.vla_runtime import VLARuntime
 from embodiedbench.main import logger
@@ -95,21 +102,34 @@ class EB_ManipulationHarnessEvaluator:
         self.place_tolerance = float(config.get('place_tolerance', 12.0))
         self.vla_backend_name = config.get('vla_backend', 'mock')
         self.openvla_backend = None
+        self.pirlinf_backend = None
         self.openvla_max_chunks = int(config.get('openvla_max_chunks', 8))
+        self.pirlinf_max_chunks = int(config.get('pirlinf_max_chunks', 8))
+        self.pirlinf_replan_steps = int(config.get('pirlinf_replan_steps', 5))
+        self.openvla_conversion = {
+            'max_delta_xyz': config.get('openvla_max_delta_xyz', 0.05),
+            'max_delta_rotation': config.get('openvla_max_delta_rotation', 0.5),
+            'workspace_bounds': config.get(
+                'openvla_workspace_bounds', [-0.3, -0.5, 0.6, 0.7, 0.5, 1.6]
+            ),
+            'gripper_convention': config.get(
+                'openvla_gripper_convention', 'libero_minus_open_plus_close'
+            ),
+            'rotation_frame': config.get('openvla_rotation_frame', 'local'),
+        }
         if self.vla_backend_name == 'openvla_http':
             self.openvla_backend = OpenVLAHTTPBackend(
                 config.get('openvla_url', ''),
                 timeout=config.get('openvla_timeout', 120.0),
-                max_delta_xyz=config.get('openvla_max_delta_xyz', 0.05),
-                max_delta_rotation=config.get('openvla_max_delta_rotation', 0.5),
-                workspace_bounds=config.get(
-                    'openvla_workspace_bounds', [-0.3, -0.5, 0.6, 0.7, 0.5, 1.6]
-                ),
-                gripper_convention=config.get(
-                    'openvla_gripper_convention', 'libero_minus_open_plus_close'
-                ),
-                rotation_frame=config.get('openvla_rotation_frame', 'local'),
+                **self.openvla_conversion,
                 expected_unnorm_key=config.get('openvla_unnorm_key', 'libero_object'),
+            )
+        elif self.vla_backend_name == 'pirlinf_websocket':
+            self.pirlinf_backend = PiRLinfWebsocketBackend(
+                config.get('pirlinf_host', '127.0.0.1'),
+                int(config.get('pirlinf_port', 8010)),
+                replan_steps=self.pirlinf_replan_steps,
+                timeout=config.get('pirlinf_timeout', 120.0),
             )
         elif self.vla_backend_name != 'mock':
             raise ValueError(f"Unsupported vla_backend: {self.vla_backend_name!r}")
@@ -420,6 +440,137 @@ class EB_ManipulationHarnessEvaluator:
         state['chunks_executed'] = runtime_result.chunks_executed
         return state
 
+    def _execute_pirlinf(
+        self, obs_dict, instruction, invocation, id_to_sim_name, grounding_frames, remaining
+    ):
+        """Infer PiRLinf chunks and execute each delta against the live pose."""
+        if remaining <= 0:
+            raise PiRLinfBackendError('no environment-step budget remains for vla_act')
+        mode = invocation.get('mode')
+        object_id = invocation.get('object') or invocation.get('target')
+        destination_id = invocation.get('destination')
+        state = {
+            'obs_dict': obs_dict,
+            'done': False,
+            'info': {'task_success': 0},
+            'grounding': None,
+            'grounding_metrics': None,
+            'attachments': [],
+            'attachment_available': False,
+            'step_results': [],
+            'tau_reason': None,
+            'gripper_qpos_source': None,
+        }
+
+        def policy_observation(current_obs):
+            front_rgb = current_obs.get('front_rgb')
+            wrist_rgb = current_obs.get('wrist_rgb')
+            gripper_pose = current_obs.get('gripper_pose')
+            if front_rgb is None or wrist_rgb is None or gripper_pose is None:
+                raise PiRLinfBackendError(
+                    'PiRLinf requires live front_rgb, wrist_rgb, and gripper_pose observations'
+                )
+            gripper_qpos = current_obs.get('gripper_joint_positions')
+            if gripper_qpos is None:
+                gripper_open = current_obs.get('gripper_open')
+                if gripper_open is None:
+                    raise PiRLinfBackendError(
+                        'PiRLinf requires gripper_joint_positions or gripper_open'
+                    )
+                gripper_qpos = [0.04, 0.04] if float(gripper_open) > 0.5 else [0.0, 0.0]
+                qpos_source = 'gripper_open_fallback'
+            else:
+                qpos_source = 'gripper_joint_positions'
+            state['gripper_qpos_source'] = qpos_source
+            return PiRLinfObservation(
+                front_rgb, wrist_rgb, gripper_pose, gripper_qpos, mode
+            )
+
+        def execute(chunk):
+            qpos_source = state['gripper_qpos_source']
+            for raw_delta in chunk.raw_deltas:
+                if state['done'] or len(state['step_results']) >= remaining:
+                    break
+                gripper_pose = state['obs_dict'].get('gripper_pose')
+                if gripper_pose is None:
+                    raise PiRLinfBackendError(
+                        'PiRLinf requires live gripper_pose for action conversion'
+                    )
+                try:
+                    action = convert_libero_delta_to_eb(
+                        raw_delta, gripper_pose, **self.openvla_conversion
+                    )
+                except OpenVLABackendError as exc:
+                    raise PiRLinfBackendError(
+                        f'PiRLinf action conversion failed: {exc}'
+                    ) from exc
+                obs, reward, done, info = self.env.step(action)
+                if self.config.get('save_images', False):
+                    self.env.save_image(['front_rgb'])
+                current_obs = vars(copy.deepcopy(obs)) if not isinstance(obs, dict) else obs
+                grounding, metrics = self._perceive_grounding(current_obs)
+                grounding_frames.append(metrics)
+                self._save_grounding_audit(current_obs, grounding, metrics)
+                attachments, attachment_available = self._grasp_attachment_evidence(info)
+                state.update({
+                    'obs_dict': current_obs,
+                    'done': bool(done),
+                    'info': info,
+                    'grounding': grounding,
+                    'grounding_metrics': metrics,
+                    'attachments': attachments,
+                    'attachment_available': attachment_available,
+                })
+                state['step_results'].append({
+                    'action': list(action),
+                    'raw_delta': list(raw_delta),
+                    'inference_duration_s': chunk.inference_duration_s,
+                    'full_chunk_length': chunk.full_chunk_length,
+                    'gripper_qpos_source': qpos_source,
+                    'reward': reward,
+                    'action_success': info['action_success'],
+                    'task_success': info['task_success'],
+                    'env_done': bool(done),
+                    'env_feedback': info.get('env_feedback', ''),
+                    'grasped_objects': attachments,
+                    'attachment_evidence_available': attachment_available,
+                })
+            return policy_observation(state['obs_dict'])
+
+        def stop_after_chunk(_observation):
+            if state['done']:
+                state['tau_reason'] = 'environment_done'
+                return True
+            if mode == 'grasp' and state['attachment_available']:
+                target_name = id_to_sim_name.get(object_id)
+                if target_name and target_name in state['attachments']:
+                    state['tau_reason'] = 'target_attached'
+                    return True
+            if mode == 'place' and state['attachment_available'] and not state['attachments']:
+                coords = state['grounding']['planner_coords']
+                spatial = classify_spatial_postcondition(
+                    coords.get(destination_id), coords.get(object_id), self.place_tolerance
+                )
+                if spatial['postcondition_met']:
+                    state['tau_reason'] = 'released_at_destination'
+                    return True
+            return False
+
+        prompt = f"{instruction.strip()}\nMode: {mode}."
+        runtime_result = VLARuntime(self.pirlinf_backend).run(
+            initial_observation=policy_observation(obs_dict),
+            prompt=prompt,
+            max_chunks=min(
+                self.pirlinf_max_chunks,
+                math.ceil(remaining / self.pirlinf_replan_steps),
+            ),
+            tau=stop_after_chunk,
+            executor=execute,
+        )
+        state['stop_reason'] = state['tau_reason'] or runtime_result.termination_reason
+        state['chunks_executed'] = runtime_result.chunks_executed
+        return state
+
     # -- main loop --------------------------------------------------------
 
     def evaluate(self):
@@ -548,17 +699,26 @@ class EB_ManipulationHarnessEvaluator:
                     self._record_trace(trace, record)
                     continue
 
-                if invocation.get('action') == 'vla_act' and self.openvla_backend is not None:
+                if invocation.get('action') == 'vla_act' and (
+                    self.openvla_backend is not None or self.pirlinf_backend is not None
+                ):
                     remaining = self.env._max_episode_steps - self.env._current_step
+                    backend_name = self.vla_backend_name
                     try:
-                        openvla = self._execute_openvla(
-                            obs_dict, user_instruction, invocation, id_to_sim_name,
-                            grounding_frames, remaining,
-                        )
-                    except OpenVLABackendError as error:
-                        feedback = f'OpenVLA vla_act failed: {error}'
+                        if self.pirlinf_backend is not None:
+                            vla_execution = self._execute_pirlinf(
+                                obs_dict, user_instruction, invocation, id_to_sim_name,
+                                grounding_frames, remaining,
+                            )
+                        else:
+                            vla_execution = self._execute_openvla(
+                                obs_dict, user_instruction, invocation, id_to_sim_name,
+                                grounding_frames, remaining,
+                            )
+                    except (OpenVLABackendError, PiRLinfBackendError) as error:
+                        feedback = f'{backend_name} vla_act failed: {error}'
                         record.update({
-                            'backend': 'openvla_http',
+                            'backend': backend_name,
                             'execution_status': 'failed',
                             'status': 'vla_backend_error',
                             'feedback': feedback,
@@ -573,12 +733,12 @@ class EB_ManipulationHarnessEvaluator:
                         self._record_trace(trace, record)
                         continue
 
-                    step_results = openvla['step_results']
-                    obs_dict = openvla['obs_dict']
-                    done = openvla['done']
-                    info = openvla['info']
-                    grounding = openvla['grounding']
-                    grounding_metrics = openvla['grounding_metrics']
+                    step_results = vla_execution['step_results']
+                    obs_dict = vla_execution['obs_dict']
+                    done = vla_execution['done']
+                    info = vla_execution['info']
+                    grounding = vla_execution['grounding']
+                    grounding_metrics = vla_execution['grounding_metrics']
                     avg_obj_coord = grounding['planner_coords']
                     object_roles = grounding['roles']
                     object_labels = grounding['labels']
@@ -591,8 +751,8 @@ class EB_ManipulationHarnessEvaluator:
                     mode = invocation.get('mode')
                     object_id = invocation.get('object') or invocation.get('target')
                     destination_id = invocation.get('destination')
-                    attachments = openvla['attachments']
-                    attachment_available = openvla['attachment_available']
+                    attachments = vla_execution['attachments']
+                    attachment_available = vla_execution['attachment_available']
                     held_object_id, held_evidence_available = reconcile_held_object(
                         held_object_id, attachments, attachment_available, id_to_sim_name
                     )
@@ -648,7 +808,7 @@ class EB_ManipulationHarnessEvaluator:
                     )
                     feedback = (
                         step_results[-1]['env_feedback']
-                        if step_results else 'OpenVLA executed no actions'
+                        if step_results else f'{backend_name} executed no actions'
                     )
                     if mode == 'place' and primitive_postcondition_met and not done:
                         feedback += (
@@ -657,7 +817,7 @@ class EB_ManipulationHarnessEvaluator:
                         )
                     no_progress_guard.observe_execution(invocation, step_results)
                     record.update({
-                        'backend': 'openvla_http',
+                        'backend': backend_name,
                         'primitive': 'vla_act',
                         'is_contact': True,
                         'meta': {
@@ -682,8 +842,12 @@ class EB_ManipulationHarnessEvaluator:
                         'held_object_id': held_object_id,
                         'env_done': bool(done),
                         'termination_reason': termination_reason,
-                        'vla_stop_reason': openvla['stop_reason'],
-                        'vla_chunks_executed': openvla['chunks_executed'],
+                        'gripper_qpos_sources': [
+                            step.get('gripper_qpos_source') for step in step_results
+                            if step.get('gripper_qpos_source') is not None
+                        ],
+                        'vla_stop_reason': vla_execution['stop_reason'],
+                        'vla_chunks_executed': vla_execution['chunks_executed'],
                         'primitive_postcondition_met': primitive_postcondition_met,
                         'spatial_postcondition': spatial_postcondition,
                         'physical_state': summarize_physical_state(

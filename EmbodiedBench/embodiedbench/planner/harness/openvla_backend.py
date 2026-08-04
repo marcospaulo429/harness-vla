@@ -89,6 +89,61 @@ def _quaternion_to_euler_xyz(quaternion: np.ndarray) -> np.ndarray:
     return np.degrees([roll, pitch, yaw])
 
 
+def convert_libero_delta_to_eb(
+    raw_delta: Sequence[float],
+    gripper_pose: Sequence[float],
+    *,
+    max_delta_xyz: float,
+    max_delta_rotation: float,
+    workspace_bounds: Sequence[float],
+    gripper_convention: str,
+    rotation_frame: str,
+) -> list[int]:
+    """Compose one LIBERO delta with a live ``[xyz, quat]`` into EB bins."""
+    if len(raw_delta) != 7 or len(gripper_pose) < 7:
+        raise OpenVLABackendError("action and gripper_pose must have 7 values")
+    pose = np.asarray(gripper_pose[:7], dtype=float)
+    if not np.all(np.isfinite(pose)):
+        raise OpenVLABackendError("gripper_pose must contain finite values")
+    bounds = np.asarray(workspace_bounds, dtype=float)
+
+    delta_xyz = np.clip(
+        np.asarray(raw_delta[:3], dtype=float), -max_delta_xyz, max_delta_xyz
+    )
+    target_xyz = np.clip(pose[:3] + delta_xyz, bounds[:3], bounds[3:])
+    resolution = (bounds[3:] - bounds[:3]) / VOXEL_SIZE
+    voxel = np.clip(
+        np.floor((target_xyz - bounds[:3]) / resolution).astype(int),
+        0,
+        VOXEL_SIZE - 1,
+    )
+
+    delta_rotvec = np.asarray(raw_delta[3:6], dtype=float)
+    angle = float(np.linalg.norm(delta_rotvec))
+    if angle > max_delta_rotation:
+        delta_rotvec *= max_delta_rotation / angle
+    current_rotation = _normalized_quaternion(pose[3:7])
+    delta_rotation = _rotvec_to_quaternion(delta_rotvec)
+    target_rotation = (
+        _quaternion_multiply(current_rotation, delta_rotation)
+        if rotation_frame == "local"
+        else _quaternion_multiply(delta_rotation, current_rotation)
+    )
+    euler = _quaternion_to_euler_xyz(target_rotation)
+    rotation_bins = np.clip(
+        np.rint((euler + 180.0) / ROTATION_RESOLUTION).astype(int),
+        0,
+        ROTATION_BINS,
+    )
+
+    gripper_value = float(raw_delta[6])
+    if gripper_convention == "libero_minus_open_plus_close":
+        eb_gripper = 0 if gripper_value >= 0 else 1
+    else:
+        eb_gripper = 1 if gripper_value >= 0 else 0
+    return [int(value) for value in np.concatenate((voxel, rotation_bins, [eb_gripper]))]
+
+
 def _default_transport(url: str, payload: Mapping, timeout: float) -> Mapping:
     request = urllib.request.Request(
         url,
@@ -227,56 +282,19 @@ class OpenVLAHTTPBackend:
         self, raw_delta: Sequence[float], gripper_pose: Sequence[float]
     ) -> list[int]:
         """Compose a LIBERO delta with live ``[xyz, quat]`` into EB bins."""
-        if len(raw_delta) != 7 or len(gripper_pose) < 7:
-            raise OpenVLABackendError("action and gripper_pose must have 7 values")
-        pose = np.asarray(gripper_pose[:7], dtype=float)
-        if not np.all(np.isfinite(pose)):
-            raise OpenVLABackendError("gripper_pose must contain finite values")
-
-        delta_xyz = np.clip(
-            np.asarray(raw_delta[:3], dtype=float),
-            -self.max_delta_xyz,
-            self.max_delta_xyz,
+        return convert_libero_delta_to_eb(
+            raw_delta,
+            gripper_pose,
+            max_delta_xyz=self.max_delta_xyz,
+            max_delta_rotation=self.max_delta_rotation,
+            workspace_bounds=self.workspace_bounds,
+            gripper_convention=self.gripper_convention,
+            rotation_frame=self.rotation_frame,
         )
-        target_xyz = np.clip(
-            pose[:3] + delta_xyz,
-            self.workspace_bounds[:3],
-            self.workspace_bounds[3:],
-        )
-        resolution = (self.workspace_bounds[3:] - self.workspace_bounds[:3]) / VOXEL_SIZE
-        voxel = np.clip(
-            np.floor((target_xyz - self.workspace_bounds[:3]) / resolution).astype(int),
-            0,
-            VOXEL_SIZE - 1,
-        )
-
-        delta_rotvec = np.asarray(raw_delta[3:6], dtype=float)
-        angle = float(np.linalg.norm(delta_rotvec))
-        if angle > self.max_delta_rotation:
-            delta_rotvec *= self.max_delta_rotation / angle
-        current_rotation = _normalized_quaternion(pose[3:7])
-        delta_rotation = _rotvec_to_quaternion(delta_rotvec)
-        target_rotation = (
-            _quaternion_multiply(current_rotation, delta_rotation)
-            if self.rotation_frame == "local"
-            else _quaternion_multiply(delta_rotation, current_rotation)
-        )
-        euler = _quaternion_to_euler_xyz(target_rotation)
-        rotation_bins = np.clip(
-            np.rint((euler + 180.0) / ROTATION_RESOLUTION).astype(int),
-            0,
-            ROTATION_BINS,
-        )
-
-        gripper_value = float(raw_delta[6])
-        if self.gripper_convention == "libero_minus_open_plus_close":
-            eb_gripper = 0 if gripper_value >= 0 else 1
-        else:
-            eb_gripper = 1 if gripper_value >= 0 else 0
-        return [int(value) for value in np.concatenate((voxel, rotation_bins, [eb_gripper]))]
 
 
 __all__ = [
+    "convert_libero_delta_to_eb",
     "OpenVLAAction",
     "OpenVLABackendError",
     "OpenVLAHTTPBackend",
