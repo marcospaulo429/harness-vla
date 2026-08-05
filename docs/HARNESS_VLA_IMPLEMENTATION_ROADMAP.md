@@ -1,133 +1,242 @@
-# Roadmap de implementação fiel ao Harness VLA v2
+# Roadmap de implementação e avaliação do Harness VLA v2
 
-> Fonte obrigatória: arXiv:2607.08448v2. Antes de iniciar cada milestone, o
-> `pesquisador-paper` deve reconfirmar a seção, o contrato e os detalhes que o
-> paper deixa específicos ao benchmark.
+Atualizado em 2026-08-05. Este é o único documento de planejamento futuro do
+repositório. O estado consolidado está em `HARNESS_VLA_BETA_REPORT.md` e os
+resultados históricos em `docs/runs/`.
 
-## Classificação
+## 1. Regras de escopo
 
-- **paper-confirmed**: mecanismo e papel descritos pelo paper;
-- **paper-compatible**: detalhe necessário, não especificado pelo paper;
-- **beta-only**: instrumentação local, sem alegação de fazer parte do método.
+Antes de implementar um mecanismo, o `pesquisador-paper` deve confirmar a seção,
+o contrato e o que permanece específico ao benchmark em arXiv:2607.08448v2.
 
-## Protocolo para cada milestone
+- **paper-confirmed:** mecanismo e papel publicados;
+- **paper-compatible:** adaptação necessária, não especificada pelo paper;
+- **beta-only:** instrumentação ou extensão local, sem alegação de fidelidade.
 
-1. Verificação no paper v2.
-2. Teste unitário/fake sem simulador.
-3. Smoke test físico isolado, quando aplicável.
-4. Um episódio fixo headless.
-5. Comparação com a baseline nos mesmos índices e budgets.
-6. Análise de traces por subagente.
-7. Documentação da run e commit pequeno.
-8. Só então avançar ao próximo milestone.
+Componentes P0 publicados têm precedência sobre extensões beta-only. Cada
+mudança deve ter teste leve, smoke fixo, comparação pareada quando aplicável,
+trace analisável e commit próprio.
 
-## Ordem de implementação
+## 2. Estado dos componentes
 
-### M1 — Pós-condições e feedback uniforme
+| Componente | Classe | Estado | Próximo gate |
+|---|---|---|---|
+| Planner, JSON e loop fechado | paper-confirmed | implementado | regressão Etapa E |
+| Biblioteca fixa e guards | paper-confirmed | implementado | vocabulário LIBERO |
+| Pós-condições físicas | paper-confirmed | parcial avançado | cobertura uniforme |
+| Trace incremental | paper-confirmed/compatible | implementado | manifesto de eval |
+| Runtime `vla_act` por chunks | paper-confirmed | implementado | contrato planner-facing |
+| Backend pi0.5/RLinf | paper-confirmed | implementado | Harness LIBERO nativo |
+| RGB-D/world map | paper-confirmed | parcial | remover `sim_mask`/oracle |
+| Task Specific Memory | paper-confirmed | offline | integrar no runtime |
+| Bootstrap/deployment | paper-confirmed | política pura | integrar no evaluator |
+| Global Memory incremental | paper-confirmed | ledger offline | promoção auditada |
+| REPL mediado por arquivos | paper-confirmed | ausente | worker fake idempotente |
+| Protocolos LIBERO/Pro | paper-confirmed | baseline smoke | comparação pareada |
+| EB-Navigation | beta-only | protótipo local | avaliar após P0 |
 
-- **Tipo:** paper-confirmed; thresholds são paper-compatible.
-- **Fonte:** §2.1, §2.3, Apêndices B e C.
-- **Objetivo:** separar execução válida, pós-condição da primitiva e sucesso da tarefa.
-- **Estado:** núcleo M1 implementado; grasp possui attachment/geometria, termination reason e guard de place.
-- **Próximo incremento:** pós-condição de release/place e `move_to` por tolerância.
-- **Aceitação:** nenhum `action_success` isolado vira sucesso semântico.
+## 3. Fase I: fechar o lifecycle do método
 
-### M2 — Contrato `vla_act(prompt, max_chunks, τ)`
+### P0.1 — Task Specific Memory no runtime
 
-- **Tipo:** paper-confirmed; catálogo/threshold de `τ` é benchmark-specific.
-- **Fonte:** §2.3, Apêndices B, C e E.5.
-- **Objetivo:** budget por chunks, early return e razão de término.
-- **Estado:** contrato backend-neutral implementado e testado com fake; adapter VLA real permanece no M10.
-- **Teste inicial:** backend fake satisfaz `τ` ou atinge o cap sem inferência extra.
-- **Aceitação:** resultado registra chunks pedidos/usados, `tau_satisfied` e cap;
-  budget esgotado permanece uma razão de término compatível com continuação.
-- **Persistência:** registros por chunk entram no trace incremental do M3.
+**Fonte:** §2.2, Apêndices A e E.3.
+**Contrato:** uma seed de referência produz memória semântica e procedural;
+novas seeds reutilizam a estrutura, mas re-groundeiam toda geometria.
 
-### M3 — Trace incremental resistente a crash
+Entregas:
 
-- **Tipo:** registro por turn é paper-confirmed; atomicidade é paper-compatible.
-- **Fonte:** §2.2, Apêndices A e E.
-- **Objetivo:** persistir uma linha JSONL por decisão, inclusive rejeições.
-- **Aceitação:** crash não perde turns concluídos; resumo reconstruível do trace.
+1. retrieval por identidade/estrutura de tarefa;
+2. seleção explícita e hash no manifesto;
+3. injeção da memória resolvida no prompt;
+4. progresso auditável sobre os passos recuperados;
+5. fallback zero-shot quando não houver binding seguro.
 
-### M4 — Task Specific Memory offline
+Aceitação:
 
-- **Tipo:** paper-confirmed para memoria semantica/procedural parametrizada; schema e gates locais sao beta-only.
-- **Fonte:** §2.2, Apêndices A e E.3.
-- **Objetivo:** gerar audit JSON semântico e command JSONL procedural somente de rollout verificado.
-- **Aceitação:** uma primitiva por linha, ordem preservada, sem coordenadas literais quando há binding simbólico.
-- **Estado:** concluido no commit `ddefadb`; 117 testes passaram e 0/3 rollouts reais foram promovidos, como esperado pelas pos-condicoes nao verificadas.
+- seed verificada gera pacote determinístico;
+- position swap altera bindings, não a estrutura;
+- coordenadas literais da seed nunca entram no deployment;
+- ausência/ambiguidade rejeita a memória sem ação física.
 
-### M5 — Retrieval e re-grounding de Task Specific Memory
+### P0.2 — Bootstrap e deployment reais
 
-- **Tipo:** paper-confirmed para prior estrutural e re-grounding atual; algoritmo de selecao e matching local sao paper-compatible/beta-only.
-- **Fonte:** §2.2, §3.2, Apêndices A/C/E.3.
-- **Objetivo:** usar a memória como prior estrutural e resolver posições na cena atual.
-- **Aceitação:** posições trocadas mudam bindings, não copiam xyz da seed.
-- **Estado:** resolver offline concluido no commit `4b7c986`; gate de tres cenas aprovado. Retrieval automatico, prompt e deployment continuam pendentes.
+**Fonte:** §2.2, Apêndice C.
+**Contrato:** exploração/reset/escrita somente no bootstrap; avaliação held-out
+com memória congelada e sem incluir a seed de referência na métrica.
 
-### M6 — Fases bootstrap e deployment
+Entregas:
 
-- **Tipo:** paper-confirmed.
-- **Fonte:** §2.2 e Apêndice C.
-- **Objetivo:** reset/budget amplo e escrita de memória somente no bootstrap; deployment estrito e read-only.
-- **Aceitação:** seed de bootstrap nunca entra na métrica final.
-- **Estado:** contrato puro concluido no commit `3cdf373`; integracao no evaluator e gate de run permanecem pendentes.
+1. manifest de fase obrigatório;
+2. partição de seeds e budgets por fase;
+3. guards de reset e escrita no evaluator;
+4. hashes de memória antes/depois da run;
+5. denominador de deployment independente do bootstrap.
 
-### M7 — Global Memory auditável e incremental
+Aceitação:
 
-- **Tipo:** paper-confirmed; política de promoção é paper-compatible.
-- **Fonte:** §2.2, Apêndices A e E.4.
-- **Objetivo:** candidatos com provenance, deduplicação e memória congelada em deployment.
-- **Aceitação:** nenhuma regra sem trace de evidência; atualização idempotente.
-- **Estado:** ledger offline de candidatos concluído; exige run/JSONL completos,
-  referencia turns por hash, deduplica de forma idempotente e bloqueia escrita em
-  deployment. Interpretação e promoção pelo agente permanecem pendentes; a extração
-  estruturada de pós-condições é instrumentação `paper-compatible`, não algoritmo
-  de promoção especificado pelo paper.
+- escrita ou reset proibido falha antes de executar ação;
+- seed bootstrap não aparece no resumo de deployment;
+- hashes permanecem constantes durante deployment.
 
-### M8 — REPL mediado por arquivos
+### P0.3 — Global Memory incremental
 
-- **Tipo:** paper-confirmed.
-- **Fonte:** Apêndices A e E.2.
-- **Objetivo:** `command.json`, estados/logs indexados e sinal de conclusão entre planner e worker.
-- **Aceitação:** exatamente uma execução por comando e retomada sem duplicação.
+**Fonte:** §2.2, Apêndices A e E.4.
+**Contrato:** regras de sucesso, modelos de falha e evidência negativa são
+extraídos das interações, refinados no bootstrap e congelados no deployment.
 
-### M9 — Percepção isolada RGB-D/world map
+Entregas:
 
-- **Tipo:** paper-confirmed.
-- **Fonte:** §2.1–2.2, §3.3, Apêndice E.2.
-- **Objetivo:** remover coordenadas privilegiadas do planner e exigir pixels + world map.
-- **Primeiro teste:** API pura pixels → mediana robusta de world coordinates.
-- **Aceitação:** toda coordenada tem provenance de câmera/pixels.
+1. interpretação estruturada dos candidatos do ledger;
+2. promoção/rejeição com provenance;
+3. deduplicação e substituição auditável;
+4. preservação de negative evidence;
+5. renderização somente de regras promovidas.
 
-### M10 — Backend VLA frozen real
+Aceitação:
 
-- **Tipo:** paper-confirmed.
-- **Fonte:** §2.3, §3.1, Apêndices B e D.
-- **Objetivo:** substituir mock por checkpoint aprendido, visual e congelado.
-- **Aceitação:** ações vêm do backend VLA; o mesmo checkpoint é usado no baseline direto e no harness.
+- nenhuma regra sem trace/turn/hash;
+- reprocessar o mesmo trace é idempotente;
+- deployment não muda o arquivo nem o hash da memória.
 
-### M11 — Vocabulário por embodiment
+### P0.4 — Percepção isolada
 
-- **Tipo:** paper-confirmed.
-- **Fonte:** §2.3 e Apêndice B.
-- **Ordem:** `move_pose`; arm binding; somente com RoboCasa, `navigate_to`/`move_base`.
-- **Aceitação:** disponibilidade corresponde ao benchmark e não muda em deployment.
+**Fonte:** §2.1–2.2, §3.3, Apêndice E.2.
+**Contrato:** o planner localiza visualmente e consulta RGB-D/world map; estado
+privilegiado pode ser usado somente para métricas.
 
-### M12 — Protocolos experimentais completos
+Entregas:
 
-- **Tipo:** paper-confirmed.
-- **Fonte:** §3 e Apêndices C/F.
-- **Objetivo:** LIBERO, LIBERO-Pro, RoboCasa365 e RoboTwin C2R com seeds, baselines e métricas oficiais.
-- **Aceitação:** manifests rejeitam vazamento de seed/memória e checkpoint divergente.
+1. payload multimodal do planner;
+2. seleção visual de objeto/pixel;
+3. consulta robusta ao world map;
+4. remoção de `sim_mask`, poses e bboxes oracle do caminho de decisão;
+5. re-localização após movimentos e oclusões.
 
-## Pontos de parada
+Aceitação:
 
-- Após M3: arquitetura auditável e resistente a crash.
-- Após M7: lifecycle e memória do paper, ainda sem VLA real.
-- Após M10: candidato a reprodução funcional em um benchmark.
-- Após M12: candidato a reprodução experimental comparável à v2.
+- toda coordenada registra câmera/frame/pixel/depth/calibração;
+- auditor detecta e rejeita campo privilegiado no payload;
+- position swap e oclusão mantêm identidade ou falham de forma explícita.
 
-Até M10, resultados do EB-Manipulation continuam sendo validação da beta, não
-reprodução dos números científicos do paper.
+### P0.5 — Contrato planner-facing de `vla_act`
+
+**Fonte:** §2.3, Apêndices B e E.5.
+**Contrato:** `vla_act(prompt, max_chunks, tau)` executa observações vivas até o
+predicado ou cap, sem inferência adicional após early return.
+
+Entregas:
+
+1. schema de prompt, cap e predicado permitido por interação;
+2. validação semântica no planner;
+3. trace com cap solicitado/usado e definição de `tau`;
+4. métricas de chunks e razão de término.
+
+Aceitação:
+
+- fake e backend real param exatamente no primeiro chunk elegível;
+- budget esgotado é continuação possível, não falso sucesso;
+- trace reconstrói integralmente a chamada.
+
+## 4. Fase II: reprodução funcional no LIBERO
+
+### P0.6 — Harness LIBERO nativo
+
+**Fonte:** §2.3, §3.1–3.2, Apêndices B, C e D.
+**Contrato:** baseline direta e Harness usam o mesmo pi0.5/RLinf frozen, com
+controle analítico fora do contato e `vla_act` no contato.
+
+Entregas:
+
+1. evaluator Harness no embodiment nativo;
+2. vocabulário LIBERO, incluindo `move_pose`;
+3. observações e ações nativas, sem conversão EB;
+4. checkpoint SHA e configuração no manifesto;
+5. baseline e Harness pareados.
+
+Aceitação incremental:
+
+1. uma tarefa: bootstrap `s0`, deployment `s1`;
+2. 10 tarefas × 10 seeds em LIBERO-Spatial;
+3. quatro suites LIBERO;
+4. nenhuma divergência de checkpoint ou seed entre braços da comparação.
+
+### P1.1 — REPL mediado por arquivos
+
+**Fonte:** Apêndices A e E.2.
+**Contrato:** planner e worker trocam comando, estado, log e flag de conclusão;
+o worker é o único proprietário do simulador.
+
+Aceitação:
+
+- cada comando é consumido exatamente uma vez;
+- estados são monotônicos;
+- crash/restart não duplica ação nem perde turno concluído.
+
+## 5. Fase III: protocolo experimental
+
+### 5.1 Escada de avaliação
+
+1. **Testes/fakes:** regressão de contratos sem simulador.
+2. **Etapa E:** `[0,15,38]`, somente como regressão beta-only.
+3. **VLA direto LIBERO-Spatial:** ampliar o smoke 9/10 para 10 seeds por tarefa.
+4. **Harness zero-shot:** mesmo checkpoint, sem Task/Global Memory.
+5. **Harness + Task Memory:** bootstrap `s0`, deployment held-out.
+6. **Harness + Global Memory:** mesma partição e budget.
+7. **Harness completo:** ambas as memórias congeladas no deployment.
+8. **Quatro suites LIBERO:** protocolo pareado completo.
+9. **LIBERO-Pro:** células oficiais de perturbação.
+10. **EB-Navigation:** generalização beta-only, separada das alegações do paper.
+11. **RoboCasa365 e RoboTwin C2R:** cobertura final.
+
+### 5.2 Matriz mínima de ablações
+
+| Braço | Task Memory | Global Memory | Finalidade |
+|---|---:|---:|---|
+| VLA direto | não | não | baseline frozen |
+| Harness zero-shot | não | não | efeito do planner/primitivas |
+| Harness task-only | sim | não | efeito da memória específica |
+| Harness global-only | não | sim | efeito das regras globais |
+| Harness completo | sim | sim | método completo |
+
+Depois dessa matriz: cap de `vla_act` e planners publicados, sempre alterando um
+único fator por vez. Ablations locais de threshold ou feedback devem ser marcadas
+**paper-compatible**, não atribuídas ao paper.
+
+### 5.3 Métricas obrigatórias
+
+- `task_success` por tarefa, suite, seed e perturbação;
+- intervalos de confiança e número de rollouts completos;
+- chunks e chamadas de `vla_act`;
+- primitivas analíticas por tipo;
+- parse, compile e rejeição semântica;
+- pós-condições físicas;
+- falhas de grounding, planejamento, contato e infraestrutura;
+- tempo total, por turno e por inferência;
+- hashes de checkpoint, prompt e memórias.
+
+## 6. Gates operacionais
+
+Antes de qualquer avaliação pesada:
+
+1. `git status` e commit identificados;
+2. testes leves e `git diff --check`;
+3. GPU escolhida por memória livre e utilização;
+4. Ollama/modelo e servidor VLA verificados;
+5. espaço em disco confirmado;
+6. uma única instância do simulador;
+7. run nomeada em `evaluation_runs/<test_id>/`.
+
+Após a avaliação:
+
+1. validar contagem de episódios e JSON/JSONL;
+2. marcar `complete`, `interrupted` ou `crashed`;
+3. preservar artefatos parciais;
+4. analisar traces antes de outra mudança;
+5. versionar resumo pequeno em `docs/runs/` quando comparável.
+
+## 7. Fora da prioridade atual
+
+- otimizar o mock de contato para aumentar score no EB-Manipulation;
+- adaptar indefinidamente o pi0.5/RLinf ao embodiment do CoppeliaSim;
+- adicionar skills não publicadas antes dos P0;
+- iniciar RoboCasa/mobile ou RoboTwin/bimanual antes do LIBERO completo.

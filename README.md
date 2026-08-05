@@ -1,10 +1,29 @@
-# Harness VLA beta on EmbodiedBench
+# Harness VLA beta
 
-Simplified architectural reproduction of [Harness VLA (arXiv:2607.08448v2)](https://arxiv.org/abs/2607.08448v2) on EB-Manipulation.
+Paper-aligned implementation of [Harness VLA (arXiv:2607.08448v2)](https://arxiv.org/abs/2607.08448v2), developed first on EB-Manipulation.
 
-- [Architecture, implementation, comparison with the paper, and 10-episode results](docs/HARNESS_VLA_BETA_REPORT.md)
-- [Development, evaluation, logging, and simulator best practices](docs/HARNESS_VLA_BEST_PRACTICES.md)
-- [Paper-aligned implementation roadmap](docs/HARNESS_VLA_IMPLEMENTATION_ROADMAP.md)
-- [Deferred features and beta scope](docs/HARNESS_VLA_NOT_IMPLEMENTED.md)
-- [Analysis of the incomplete 3-episode visual demo](docs/runs/HARNESS_DEMO_3EP_20260721.md)
-- [Grounding, grasp, and deterministic physics diagnosis](docs/runs/HARNESS_GROUNDING_GRASP_20260721.md)
+The repository currently provides the architectural core: an LLM planner that
+selects one primitive per turn, a fixed analytic/contact primitive library,
+closed-loop feedback, physical post-conditions, incremental traces, RGB-D world
+grounding infrastructure, memory lifecycle components, and a frozen pi0.5/RLinf
+backend. This is an **architectural reproduction in progress**, not yet a full
+functional or experimental reproduction of the paper.
+
+Current evidence includes:
+
+- EB-Manipulation Etapa E: `1/3`, validating the planner/primitive loop with a
+	scripted contact executor;
+- native LIBERO pi0.5/RLinf smoke baseline: `9/10` on LIBERO-Spatial;
+- a verified real-VLA grasp in EB-Manipulation, while cross-embodiment transport
+	remains diagnostic rather than a paper-comparable result.
+
+Documentation:
+
+- [Current architecture, evidence, and paper gap](docs/HARNESS_VLA_BETA_REPORT.md)
+- [Paper-aligned implementation and evaluation roadmap](docs/HARNESS_VLA_IMPLEMENTATION_ROADMAP.md)
+- [Development and evaluation practices](docs/HARNESS_VLA_BEST_PRACTICES.md)
+- [Immutable experiment reports](docs/runs)
+
+The next reproduction target is a native LIBERO Harness using the same frozen
+checkpoint in the direct-VLA baseline and the memory-guided Harness. EB-Navigation
+is treated separately as a beta-only generalization probe.

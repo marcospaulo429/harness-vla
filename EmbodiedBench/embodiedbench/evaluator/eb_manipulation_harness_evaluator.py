@@ -7,7 +7,7 @@ actions, and the loop closes by re-perceiving object coordinates and the
 end-effector pose before the next turn. A per-episode JSONL audit trace records
 every primitive, its compiled actions, and the environment feedback.
 
-Beta scope (see ``docs/HARNESS_VLA_NOT_IMPLEMENTED.md``):
+Beta scope (see ``docs/HARNESS_VLA_BETA_REPORT.md``):
 * language-only perception (object coordinate table as text, no images);
 * zero-shot (fixed manual Global Memory seed, no Task Specific Memory);
 * ``vla_act`` defaults to a mock scripted contact primitive; the optional

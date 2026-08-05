@@ -7,7 +7,7 @@ traces; in this beta they are a **fixed manual seed** (see the paper's Appendix 
 example) and are injected as context into the planner prompt.
 
 Task Specific Memory (few-shot bootstrapping traces) is intentionally *not*
-implemented in the beta — see ``docs/HARNESS_VLA_NOT_IMPLEMENTED.md``.
+implemented in the beta — see ``docs/HARNESS_VLA_BETA_REPORT.md``.
 """
 
 from __future__ import annotations

@@ -18,7 +18,7 @@ Use como fontes de verdade:
 
 - `docs/HARNESS_VLA_BETA_REPORT.md` para arquitetura, resultados e lacunas;
 - `docs/HARNESS_VLA_BEST_PRACTICES.md` para o processo de trabalho;
-- `docs/HARNESS_VLA_NOT_IMPLEMENTED.md` para o escopo pendente;
+- `docs/HARNESS_VLA_IMPLEMENTATION_ROADMAP.md` para o escopo pendente;
 - código, traces e métricas da run atual para afirmações técnicas.
 
 ## Regra de fidelidade ao paper

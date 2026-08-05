@@ -82,8 +82,16 @@ Cada experimento deve registrar:
 - métricas agregadas;
 - análise curta das falhas.
 
-Artefatos pesados permanecem em `EmbodiedBench/running/`. Resumos pequenos e
-comparáveis devem ser copiados para `docs/runs/` e versionados no Git.
+Cada teste deve ter uma pasta exclusiva em `evaluation_runs/<test_id>/`, com
+manifesto, configuração, resultados, traces e estado final. Artefatos pesados
+permanecem nessa pasta e ficam fora do Git. Resumos pequenos e comparáveis devem
+ser copiados para `docs/runs/` e versionados.
+
+Estados válidos:
+
+- `complete`: todos os episódios esperados terminaram e o resumo foi validado;
+- `interrupted`: encerramento deliberado, preservando artefatos parciais;
+- `crashed`: falha inesperada com causa e último artefato conhecido registrados.
 
 ## 5. Métricas mínimas
 
@@ -140,6 +148,13 @@ Após grasp vazio:
 
 ## 9. Simulador e renderização
 
+- Antes de qualquer run, consultar todas as GPUs e selecionar a de menor
+	utilização que tenha memória suficiente. Registrar GPU, memória inicial e
+	processos concorrentes no manifesto.
+- Sempre que possível, manter planner e VLA na mesma GPU apenas se a soma de
+	memória couber com margem; o simulador não deve competir com outro processo
+	pesado sem essa verificação.
+- Confirmar Ollama/modelo, servidor VLA e espaço em disco antes de iniciar.
 - CWD: diretório `EmbodiedBench`.
 - Carregar `.harness_env.sh`.
 - Adicionar EB-Manipulation ao `PYTHONPATH`.
@@ -193,3 +208,23 @@ Uma mudança é melhoria somente quando:
 
 Melhor JSON sem melhora física é progresso de interface, não de manipulação.
 Movimento visualmente plausível sem predicado final é diagnóstico, não sucesso.
+
+## 13. Comparações científicas
+
+Baseline direta e Harness devem usar exatamente:
+
+- o mesmo checkpoint frozen e hash;
+- as mesmas tarefas, seeds e estados iniciais;
+- o mesmo budget de ações/chunks;
+- a mesma modalidade de observação disponível ao VLA;
+- a mesma definição oficial de `task_success`.
+
+Toda ablação altera um único fator. A seed de bootstrap nunca entra no
+denominador de deployment. Task Specific Memory e Global Memory devem registrar
+hash antes e depois da run; qualquer mudança durante deployment invalida a
+comparação.
+
+Resultados EB-Manipulation e EB-Navigation são probes `beta-only`, salvo quando
+o paper usar explicitamente o mesmo benchmark e protocolo. A primeira reprodução
+funcional-alvo é LIBERO nativo com pi0.5/RLinf; a primeira comparação científica
+é VLA direto versus Harness com checkpoint idêntico.
