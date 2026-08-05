@@ -13,6 +13,7 @@ from embodiedbench.planner.harness.task_memory import (
     resolve_task_memory_commands,
     validate_task_memory,
 )
+from embodiedbench.planner.harness.prompts import build_turn_prompt
 
 
 def _record(turn, invocation, primitive, contact=False):
@@ -320,6 +321,40 @@ def test_loader_and_resolver_preserve_command_order(tmp_path):
     ]
 
 
+def test_loaded_memory_prompt_contains_only_current_scene_grounding(tmp_path):
+    trace_path = tmp_path / "trace.jsonl"
+    result_path = tmp_path / "episode.json"
+    memory_path = tmp_path / "memory"
+    trace_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in _verified_rollout()),
+        encoding="utf-8",
+    )
+    result_path.write_text(json.dumps(_successful_result()), encoding="utf-8")
+    promote_task_memory(trace_path, result_path, memory_path)
+    _, commands = load_task_memory(memory_path)
+    current_coords, current_labels, current_roles = _current_grounding(
+        red_xyz=(71, 72, 73), container_xyz=(81, 82, 83)
+    )
+
+    resolved = resolve_task_memory_commands(
+        commands, current_coords, current_labels, current_roles
+    )
+    prompt = build_turn_prompt(
+        "put the red cube in the container",
+        current_coords,
+        [0, 0, 0, 0, 0, 0, 1],
+        [],
+        object_roles=current_roles,
+        object_labels=current_labels,
+        resolved_task_memory=resolved,
+    )
+
+    assert '"target": "current red"' in prompt
+    assert '"xyz": [71, 72, 73]' in prompt
+    assert "object 1" not in prompt
+    assert "object 2" not in prompt
+
+
 def test_resolver_rejects_seed_coordinates():
     commands = [
         {
@@ -333,3 +368,30 @@ def test_resolver_rejects_seed_coordinates():
 
     with pytest.raises(ValueError, match="seed commands contain forbidden spatial data"):
         resolve_task_memory_commands(commands, *_current_grounding())
+
+
+def test_loader_rejects_invalid_utf8_commands(tmp_path):
+    memory_path = tmp_path / "memory"
+    memory_path.mkdir()
+    (memory_path / "audit.json").write_text("{}", encoding="utf-8")
+    (memory_path / "commands.jsonl").write_bytes(b"\xff\xfe\n")
+
+    with pytest.raises(ValueError, match="invalid commands JSONL"):
+        load_task_memory(memory_path)
+
+
+def test_resolver_rejects_invalid_current_coordinates():
+    commands = [{
+        "sequence": 1,
+        "source_turn": 1,
+        "action": "move_to",
+        "target": {"label": "red cube", "roles": ["manipulable"]},
+    }]
+
+    with pytest.raises(ValueError, match="current target coordinates"):
+        resolve_task_memory_commands(
+            commands,
+            {"current cube": [1, 2]},
+            {"current cube": "red cube"},
+            {"current cube": ["manipulable"]},
+        )

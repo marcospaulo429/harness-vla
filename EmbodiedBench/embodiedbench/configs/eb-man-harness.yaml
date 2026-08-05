@@ -25,3 +25,6 @@ place_tolerance: 12.0    # beta-only object-to-destination postcondition (voxels
 
 # Global Memory
 global_memory_path: ''   # empty = use the fixed manual seed
+
+# Task Specific Memory
+task_memory_path: ''     # empty = zero-shot; otherwise explicit promoted-memory directory

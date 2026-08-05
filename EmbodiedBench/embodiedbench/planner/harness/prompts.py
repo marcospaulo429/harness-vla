@@ -13,6 +13,7 @@ in-process loop for the beta). The prompt is assembled from:
 
 from __future__ import annotations
 
+import json
 from typing import Dict, List, Optional, Sequence
 
 from embodiedbench.planner.harness.primitives import (
@@ -124,6 +125,7 @@ def build_turn_prompt(
     object_labels: Optional[Dict[str, str]] = None,
     held_object_id: Optional[str] = None,
     attachment_evidence_available: bool = False,
+    resolved_task_memory: Optional[Sequence[Dict]] = None,
 ) -> str:
     """Assemble the per-turn user message.
 
@@ -154,6 +156,21 @@ def build_turn_prompt(
     lines.append(_format_candidates(object_coords, object_roles, object_labels, "destination"))
     lines.append("For place, choose a destination ID distinct from the manipulable object ID.")
     lines.append("")
+
+    if resolved_task_memory is not None:
+        lines.append("Task Specific Memory structural prior (not an execution script):")
+        lines.append(
+            "  All planner IDs and any coordinates below were re-grounded from the "
+            "CURRENT scene; no seed coordinates are present."
+        )
+        lines.append(
+            "  Use this only as a structural prior. Current observation, simulator "
+            "state, and current feedback are authoritative and take precedence."
+        )
+        lines.append(
+            json.dumps(list(resolved_task_memory), ensure_ascii=True, sort_keys=True)
+        )
+        lines.append("")
 
     if history:
         lines.append("Recent primitive history (most recent last):")

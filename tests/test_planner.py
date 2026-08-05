@@ -261,6 +261,40 @@ def test_turn_prompt_separates_roles_and_uses_labels_without_color_claims():
     assert "color" not in prompt.lower()
 
 
+def test_turn_prompt_marks_resolved_task_memory_as_current_scene_prior():
+    prompt = build_turn_prompt(
+        "place the cube",
+        {"current cube": [11, 12, 13]},
+        [0, 0, 0, 0, 0, 0, 1],
+        [],
+        resolved_task_memory=[{
+            "sequence": 1,
+            "source_turn": 1,
+            "action": "move_to",
+            "target": "current cube",
+            "xyz": [11, 12, 13],
+        }],
+    )
+
+    assert "structural prior (not an execution script)" in prompt
+    assert "CURRENT scene" in prompt
+    assert "current feedback are authoritative and take precedence" in prompt
+    assert '"xyz": [11, 12, 13]' in prompt
+
+
+def test_turn_prompt_without_task_memory_preserves_zero_shot_output():
+    args = (
+        "place the cube",
+        {"object 1": [1, 2, 3]},
+        [0, 0, 0, 0, 0, 0, 1],
+        [],
+    )
+
+    assert build_turn_prompt(*args) == build_turn_prompt(
+        *args, resolved_task_memory=None
+    )
+
+
 def test_turn_prompt_reports_authoritative_attachment_state():
     held = build_turn_prompt(
         "move the cube",

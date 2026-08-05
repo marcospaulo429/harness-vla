@@ -216,6 +216,7 @@ class HarnessPlanner:
         object_labels: Optional[Dict[str, str]] = None,
         held_object_id: Optional[str] = None,
         attachment_evidence_available: bool = False,
+        resolved_task_memory: Optional[Sequence[Dict]] = None,
     ) -> Tuple[Optional[dict], str]:
         """Request one primitive invocation from the model.
 
@@ -233,6 +234,7 @@ class HarnessPlanner:
             object_labels=object_labels,
             held_object_id=held_object_id,
             attachment_evidence_available=attachment_evidence_available,
+            resolved_task_memory=resolved_task_memory,
         )
         raw_text = self._chat(turn_prompt)
         parsed = extract_json_object(raw_text)

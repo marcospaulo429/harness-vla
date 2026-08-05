@@ -9,7 +9,7 @@ every primitive, its compiled actions, and the environment feedback.
 
 Beta scope (see ``docs/HARNESS_VLA_BETA_REPORT.md``):
 * language-only perception (object coordinate table as text, no images);
-* zero-shot (fixed manual Global Memory seed, no Task Specific Memory);
+* optional explicitly selected Task Specific Memory structural prior;
 * ``vla_act`` defaults to a mock scripted contact primitive; the optional
     OpenVLA HTTP backend is a beta-only frozen alternative, not paper reproduction.
 """
@@ -35,6 +35,10 @@ from embodiedbench.envs.eb_manipulation.rgbd_grounding import (
 )
 from embodiedbench.planner.harness.global_memory import GlobalMemory
 from embodiedbench.planner.harness.harness_planner import HarnessPlanner
+from embodiedbench.planner.harness.task_memory import (
+    load_task_memory,
+    resolve_task_memory_commands,
+)
 from embodiedbench.planner.harness.trace_io import (
     append_jsonl_record,
     initialize_jsonl,
@@ -83,6 +87,32 @@ class EB_ManipulationHarnessEvaluator:
         self.eval_set = ValidEvalSets[0]
         self.env = None
         self.planner = None
+        self.task_memory_path = config.get('task_memory_path', '') or ''
+        self.task_memory_commands = ()
+        self.task_memory_audit = {
+            'path': self.task_memory_path,
+            'hash': None,
+            'decision': 'not_configured',
+            'stage': 'selection',
+        }
+        if self.task_memory_path:
+            try:
+                audit, self.task_memory_commands = load_task_memory(
+                    self.task_memory_path
+                )
+            except (OSError, ValueError, json.JSONDecodeError) as error:
+                self.task_memory_audit.update({
+                    'decision': 'rejected',
+                    'stage': 'load',
+                    'reason': str(error),
+                })
+            else:
+                self.task_memory_audit.update({
+                    'hash': audit['source']['commands_sha256'],
+                    'decision': 'used',
+                    'stage': 'loaded',
+                })
+        self.task_memory_episode_audit = dict(self.task_memory_audit)
         self.library = PrimitiveLibrary(
             approach_dz=config.get('approach_dz', 8),
             lift_dz=config.get('lift_dz', 6),
@@ -181,6 +211,7 @@ class EB_ManipulationHarnessEvaluator:
             'selected_indexes': list(self.config.get('selected_indexes', []) or []),
             'completed_episodes': int(getattr(self.env, '_current_episode_num', 0)),
             'config': redacted_config,
+            'task_memory': dict(self.task_memory_episode_audit),
         }
         if error is not None:
             manifest['error'] = {
@@ -302,6 +333,7 @@ class EB_ManipulationHarnessEvaluator:
     def _planner_act(
         self, instruction, coords, pose, history, roles, labels,
         held_object_id=None, attachment_evidence_available=False,
+        resolved_task_memory=None,
     ):
         try:
             return self.planner.act(
@@ -309,6 +341,7 @@ class EB_ManipulationHarnessEvaluator:
                 object_roles=roles, object_labels=labels,
                 held_object_id=held_object_id,
                 attachment_evidence_available=attachment_evidence_available,
+                resolved_task_memory=resolved_task_memory,
             )
         except TypeError as exc:
             if 'unexpected keyword argument' not in str(exc):
@@ -589,6 +622,7 @@ class EB_ManipulationHarnessEvaluator:
             }
             trace = []
             grounding_frames = []
+            self.task_memory_episode_audit = dict(self.task_memory_audit)
 
             _, obs = self.env.reset()
             initialize_jsonl(self._trace_path())
@@ -618,12 +652,56 @@ class EB_ManipulationHarnessEvaluator:
 
             while not done and turn < self.max_turns:
                 turn += 1
+                resolved_task_memory = None
+                if self.task_memory_episode_audit['decision'] == 'rejected':
+                    feedback = (
+                        'Configured Task Specific Memory rejected before action: '
+                        + self.task_memory_episode_audit['reason']
+                    )
+                    self._record_trace(trace, {
+                        'turn': turn,
+                        'status': 'task_memory_rejected',
+                        'execution_status': 'not_executed',
+                        'feedback': feedback,
+                        'task_memory': dict(self.task_memory_episode_audit),
+                        'invocation': None,
+                    })
+                    break
+                if self.task_memory_commands:
+                    try:
+                        resolved_task_memory = resolve_task_memory_commands(
+                            self.task_memory_commands,
+                            avg_obj_coord,
+                            object_labels,
+                            object_roles,
+                        )
+                    except ValueError as error:
+                        self.task_memory_episode_audit.update({
+                            'decision': 'rejected',
+                            'stage': 'grounding',
+                            'rejection_turn': turn,
+                            'reason': str(error),
+                        })
+                        feedback = (
+                            'Configured Task Specific Memory rejected before action: '
+                            + str(error)
+                        )
+                        self._record_trace(trace, {
+                            'turn': turn,
+                            'status': 'task_memory_rejected',
+                            'execution_status': 'not_executed',
+                            'feedback': feedback,
+                            'task_memory': dict(self.task_memory_episode_audit),
+                            'invocation': None,
+                        })
+                        break
                 try:
                     invocation, raw_text = self._planner_act(
                         user_instruction, avg_obj_coord, pose.as_action(), history,
                         object_roles, object_labels,
                         held_object_id=held_object_id,
                         attachment_evidence_available=held_evidence_available,
+                        resolved_task_memory=resolved_task_memory,
                     )
                 except (socket.timeout, TimeoutError, OSError) as error:
                     feedback = f'Planner request failed ({type(error).__name__}: {error}). Retrying next turn.'
@@ -655,6 +733,7 @@ class EB_ManipulationHarnessEvaluator:
                     'grounding_coordinate_source': grounding['coordinate_source'],
                     'grounding_objects': grounding['objects'],
                     'grounding_oracle_metrics': grounding_metrics,
+                    'task_memory': dict(self.task_memory_episode_audit),
                 }
 
                 if invocation is None:
@@ -1096,6 +1175,7 @@ class EB_ManipulationHarnessEvaluator:
             episode_info['physical_state_final'] = summarize_physical_state(
                 object_roles, held_object_id, placed_object_ids
             )
+            episode_info['task_memory'] = dict(self.task_memory_episode_audit)
             self.save_episode_metric(episode_info)
             self.save_trace_summary()
             progress_bar.update()
