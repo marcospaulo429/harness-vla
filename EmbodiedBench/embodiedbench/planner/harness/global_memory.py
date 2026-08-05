@@ -57,6 +57,13 @@ SEED_FAILURE_MODELS: List[str] = [
     "change the wrist orientation with rotate_wrist and/or approach the target "
     "from a different offset with move_to, then retry vla_act grasp. Repeating "
     "the same pose reproduces the same failed contact geometry.",
+    "Path planning failure during transport: if move_to fails with 'Could not "
+    "create path' while holding an object, the direct straight-line path is "
+    "blocked (usually by the table surface or the destination object). Do NOT "
+    "repeat the same move_to. First lift: move_to the current X,Y with a much "
+    "higher Z (10-15 voxels above the destination height), then transport "
+    "laterally at that safe height, and only then descend above the "
+    "destination before releasing.",
 ]
 
 

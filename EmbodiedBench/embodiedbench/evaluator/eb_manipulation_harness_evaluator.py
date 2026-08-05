@@ -51,6 +51,7 @@ from embodiedbench.planner.harness.primitives import (
     PoseState,
     PrimitiveError,
     PrimitiveLibrary,
+    _physical_object_name,
     classify_grasp_outcome,
     classify_spatial_postcondition,
     pose_from_observation,
@@ -415,7 +416,8 @@ class EB_ManipulationHarnessEvaluator:
                 return True
             if mode == 'grasp' and state['attachment_available']:
                 target_name = id_to_sim_name.get(object_id)
-                if target_name and target_name in state['attachments']:
+                attached = {_physical_object_name(n) for n in state['attachments']}
+                if target_name and _physical_object_name(target_name) in attached:
                     state['tau_reason'] = 'target_attached'
                     return True
             if mode == 'place' and state['attachment_available'] and not state['attachments']:
@@ -543,7 +545,8 @@ class EB_ManipulationHarnessEvaluator:
                 return True
             if mode == 'grasp' and state['attachment_available']:
                 target_name = id_to_sim_name.get(object_id)
-                if target_name and target_name in state['attachments']:
+                attached = {_physical_object_name(n) for n in state['attachments']}
+                if target_name and _physical_object_name(target_name) in attached:
                     state['tau_reason'] = 'target_attached'
                     return True
             if mode == 'place' and state['attachment_available'] and not state['attachments']:

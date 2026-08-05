@@ -40,8 +40,10 @@ config = {
     'base_url': 'http://localhost:11434/v1',
     'api_key': 'ollama',
     'temperature': 0.0,
-    'max_tokens': 4096 if THINK else 1024,
-    'num_ctx': 8192 if THINK else None,
+    # 8192 generation tokens: with think enabled, Gemma's reasoning alone can
+    # exceed 4096, returning an empty final answer (observed as parse_error).
+    'max_tokens': 8192 if THINK else 1024,
+    'num_ctx': 16384 if THINK else None,
     'request_timeout': 1800.0 if THINK else 600.0,
     'disable_thinking': MODEL.startswith('gemma4:') and not THINK,
     'enable_thinking': THINK,
@@ -52,7 +54,7 @@ config = {
     'language_only': 1,
     'exp_name': EXPERIMENT,
     'max_turns': 12,
-    'max_env_steps': 30,
+    'max_env_steps': 150,
     'approach_dz': 8,
     'lift_dz': 6,
     'move_to_tolerance': 2.0,
