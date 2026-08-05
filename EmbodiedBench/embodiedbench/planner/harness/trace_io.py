@@ -100,8 +100,12 @@ def load_complete_jsonl(path):
 
 def summarize_trace_records(records):
     """Reconstruct execution metrics using only persisted turn records."""
+    turn_records = [
+        record for record in records
+        if record.get("status") != "initialization_reset"
+    ]
     summary = {
-        "turn_count": len(records),
+        "turn_count": len(turn_records),
         "env_step_count": 0,
         "status_counts": {},
         "primitive_counts": {},
@@ -110,7 +114,7 @@ def summarize_trace_records(records):
         "termination_reasons": {},
         "task_success": 0.0,
     }
-    for record in records:
+    for record in turn_records:
         status = record.get("status", "missing")
         summary["status_counts"][status] = summary["status_counts"].get(status, 0) + 1
         primitive = record.get("primitive")

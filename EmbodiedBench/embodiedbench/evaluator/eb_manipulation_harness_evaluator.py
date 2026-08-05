@@ -16,6 +16,7 @@ Beta scope (see ``docs/HARNESS_VLA_BETA_REPORT.md``):
 
 import os
 import copy
+import hashlib
 import json
 import math
 import socket
@@ -74,6 +75,12 @@ from embodiedbench.planner.harness.pirlinf_backend import (
     PiRLinfObservation,
     PiRLinfWebsocketBackend,
 )
+from embodiedbench.planner.harness.phase_policy import (
+    Phase,
+    PhaseOperation,
+    build_phase_manifest,
+    validate_phase_manifest,
+)
 from embodiedbench.planner.harness.vla_runtime import VLARuntime
 from embodiedbench.main import logger
 
@@ -89,6 +96,7 @@ class EB_ManipulationHarnessEvaluator:
         self.planner = None
         self.task_memory_path = config.get('task_memory_path', '') or ''
         self.task_memory_commands = ()
+        self._task_memory_payload = None
         self.task_memory_audit = {
             'path': self.task_memory_path,
             'hash': None,
@@ -107,6 +115,10 @@ class EB_ManipulationHarnessEvaluator:
                     'reason': str(error),
                 })
             else:
+                self._task_memory_payload = {
+                    'audit': audit,
+                    'commands': list(self.task_memory_commands),
+                }
                 self.task_memory_audit.update({
                     'hash': audit['source']['commands_sha256'],
                     'decision': 'used',
@@ -121,6 +133,13 @@ class EB_ManipulationHarnessEvaluator:
         self.max_turns = config.get('max_turns', 12)
         # vla_act consumes several env steps, so allow more than the default 15.
         self.max_env_steps = config.get('max_env_steps', 30)
+        self.configured_max_env_steps = self.max_env_steps
+        self.phase_manifest = None
+        self.phase_policy = None
+        self.episode_protocol_seeds = ()
+        self._protocol_memory_before = None
+        self._protocol_memory_after = None
+        self._configure_phase_protocol()
         self.grasp_thresholds = {
             'object_lift_threshold': config.get('grasp_object_lift_threshold', 3.0),
             'max_gripper_object_distance': config.get('grasp_max_distance', 8.0),
@@ -165,6 +184,106 @@ class EB_ManipulationHarnessEvaluator:
         elif self.vla_backend_name != 'mock':
             raise ValueError(f"Unsupported vla_backend: {self.vla_backend_name!r}")
 
+    @staticmethod
+    def _structured_sha256(value):
+        payload = json.dumps(
+            value, ensure_ascii=False, sort_keys=True, separators=(',', ':')
+        ).encode('utf-8')
+        return hashlib.sha256(payload).hexdigest()
+
+    def _configure_phase_protocol(self):
+        phase = self.config.get('protocol_phase', '') or ''
+        if not phase:
+            self.protocol_phase = 'unspecified'
+            return
+        self.phase_manifest = build_phase_manifest(
+            bootstrap_seed=self.config['bootstrap_seed'],
+            evaluation_seeds=self.config['evaluation_seeds'],
+            bootstrap_budget=self.config['bootstrap_budget'],
+            deployment_budget=self.config['deployment_budget'],
+        )
+        validate_phase_manifest(self.phase_manifest)
+        self.phase_policy = self.phase_manifest.policy_for(phase)
+        self.protocol_phase = self.phase_policy.phase.value
+
+        selected_indexes = self.config.get('selected_indexes')
+        protocol_seeds = self.config.get('episode_protocol_seeds')
+        if not isinstance(selected_indexes, (list, tuple)) or not selected_indexes:
+            raise ValueError('opt-in phase protocol requires explicit selected_indexes')
+        if not isinstance(protocol_seeds, (list, tuple)):
+            raise ValueError('opt-in phase protocol requires episode_protocol_seeds')
+        if len(protocol_seeds) != len(selected_indexes):
+            raise ValueError(
+                'episode_protocol_seeds must align 1:1 with selected_indexes'
+            )
+        for seed in protocol_seeds:
+            self.phase_manifest.guard_operation(
+                self.phase_policy.phase, seed, PhaseOperation.READ_MEMORY
+            )
+        self.episode_protocol_seeds = tuple(protocol_seeds)
+        # Local budget unit: benchmark environment steps per episode.
+        self.max_env_steps = min(self.configured_max_env_steps, self.phase_policy.budget)
+
+    def _protocol_audit(self, episode_offset=None):
+        seed = None
+        if episode_offset is not None and self.episode_protocol_seeds:
+            seed = self.episode_protocol_seeds[episode_offset]
+        if self.phase_policy is None:
+            return {
+                'phase': 'unspecified',
+                'protocol_seed': None,
+                'reportable': True,
+                'reset_allowed': None,
+                'memory_write_allowed': None,
+                'budget': self.max_env_steps,
+                'budget_unit': 'environment_steps_per_episode',
+                'initialization_reset': True,
+                'exploratory_reset_used': False,
+            }
+        return {
+            'phase': self.protocol_phase,
+            'protocol_seed': seed,
+            'episode_protocol_seeds': list(self.episode_protocol_seeds),
+            'reportable': self.phase_policy.reportable,
+            'reset_allowed': self.phase_policy.reset_allowed,
+            'memory_write_allowed': self.phase_policy.memory_write_allowed,
+            'budget': self.max_env_steps,
+            'phase_budget': self.phase_policy.budget,
+            'configured_max_env_steps': self.configured_max_env_steps,
+            'budget_unit': 'environment_steps_per_episode',
+            'initialization_reset': True,
+            'exploratory_reset_used': False,
+        }
+
+    def write_memory(self, protocol_seed, writer, *args, **kwargs):
+        """Guard a future memory writer without implementing memory promotion."""
+        if self.phase_manifest is not None:
+            self.phase_manifest.guard_operation(
+                self.phase_policy.phase, protocol_seed, PhaseOperation.WRITE_MEMORY
+            )
+        return writer(*args, **kwargs)
+
+    def _memory_hashes(self, global_memory):
+        return {
+            'task_memory_sha256': (
+                self._structured_sha256(self._task_memory_payload)
+                if self._task_memory_payload is not None else None
+            ),
+            'global_memory_rendered_sha256': self._structured_sha256(
+                {'rendered': global_memory.render()}
+            ),
+        }
+
+    def _verify_deployment_memory_unchanged(self):
+        if self.phase_policy is None:
+            return
+        self._protocol_memory_after = self._memory_hashes(self.planner.global_memory)
+        if (
+            self.phase_policy.phase is Phase.DEPLOYMENT
+            and self._protocol_memory_after != self._protocol_memory_before
+        ):
+            raise RuntimeError('deployment memory changed during evaluation')
+
     # -- persistence ------------------------------------------------------
 
     def _results_dir(self):
@@ -188,6 +307,7 @@ class EB_ManipulationHarnessEvaluator:
         return os.path.join(self._results_dir(), filename)
 
     def _record_trace(self, trace, record):
+        record['protocol'] = dict(self.current_episode_protocol)
         trace.append(record)
         append_jsonl_record(self._trace_path(), record)
 
@@ -212,6 +332,16 @@ class EB_ManipulationHarnessEvaluator:
             'completed_episodes': int(getattr(self.env, '_current_episode_num', 0)),
             'config': redacted_config,
             'task_memory': dict(self.task_memory_episode_audit),
+            'protocol': self._protocol_audit(),
+            'phase_manifest': (
+                self.phase_manifest.to_dict() if self.phase_manifest is not None else None
+            ),
+            'phase_manifest_sha256': (
+                hashlib.sha256(self.phase_manifest.to_json().encode('utf-8')).hexdigest()
+                if self.phase_manifest is not None else None
+            ),
+            'memory_hashes_before': self._protocol_memory_before,
+            'memory_hashes_after': self._protocol_memory_after,
         }
         if error is not None:
             manifest['error'] = {
@@ -233,6 +363,8 @@ class EB_ManipulationHarnessEvaluator:
             if file_name.endswith(".json") and file_name.startswith("episode"):
                 with open(os.path.join(folder_path, file_name), 'r', encoding='utf-8') as jf:
                     data = json.load(jf)
+                if not data.get('protocol', {}).get('reportable', True):
+                    continue
                 if data.get("planner_output_error", 0) > 0:
                     output_error += 1
                 if data.get("task_success") == 1:
@@ -624,8 +756,17 @@ class EB_ManipulationHarnessEvaluator:
             grounding_frames = []
             self.task_memory_episode_audit = dict(self.task_memory_audit)
 
+            episode_offset = self.env._current_episode_num
             _, obs = self.env.reset()
+            self.current_episode_protocol = self._protocol_audit(episode_offset)
             initialize_jsonl(self._trace_path())
+            if self.phase_manifest is not None:
+                self._record_trace(trace, {
+                    'turn': 0,
+                    'status': 'initialization_reset',
+                    'execution_status': 'initialization',
+                    'invocation': None,
+                })
             obs_dict = vars(copy.deepcopy(obs))
             if self.config.get('save_images', False):
                 self.env.save_image(['front_rgb'])
@@ -1176,6 +1317,12 @@ class EB_ManipulationHarnessEvaluator:
                 object_roles, held_object_id, placed_object_ids
             )
             episode_info['task_memory'] = dict(self.task_memory_episode_audit)
+            episode_info['protocol'] = dict(self.current_episode_protocol)
+            episode_info['memory_hashes_before'] = self._protocol_memory_before
+            episode_info['memory_hashes_after'] = (
+                self._memory_hashes(self.planner.global_memory)
+                if self.phase_manifest is not None else None
+            )
             self.save_episode_metric(episode_info)
             self.save_trace_summary()
             progress_bar.update()
@@ -1204,6 +1351,12 @@ class EB_ManipulationHarnessEvaluator:
                 self.log_path = os.path.join(
                     output_root, real_model_name, exp, self.eval_set
                 )
+            if self.phase_manifest is not None:
+                os.makedirs(self.log_path, exist_ok=True)
+                write_json_atomic(
+                    os.path.join(self.log_path, 'phase_manifest.json'),
+                    self.phase_manifest.to_dict(),
+                )
             self.env = EBManEnv(
                 eval_set=self.eval_set,
                 render_mode=self.config.get('render_mode', 'human'),
@@ -1214,11 +1367,14 @@ class EB_ManipulationHarnessEvaluator:
                 log_path=self.log_path,
             )
             self.env._max_episode_steps = self.max_env_steps
+            global_memory = GlobalMemory.load(self.config.get('global_memory_path', ''))
+            self._protocol_memory_before = self._memory_hashes(global_memory)
+            self._protocol_memory_after = None
             self.planner = HarnessPlanner(
                 model_name=self.model_name,
                 base_url=self.config.get('base_url'),
                 api_key=self.config.get('api_key'),
-                global_memory=GlobalMemory.load(self.config.get('global_memory_path', '')),
+                global_memory=global_memory,
                 temperature=self.config.get('temperature', 0.0),
                 max_tokens=self.config.get('max_tokens', 1024),
                 num_ctx=self.config.get('num_ctx'),
@@ -1229,6 +1385,7 @@ class EB_ManipulationHarnessEvaluator:
             self._write_run_manifest('running')
             try:
                 self.evaluate()
+                self._verify_deployment_memory_unchanged()
             except BaseException as error:
                 self._write_run_manifest('incomplete', error=error)
                 raise

@@ -250,13 +250,17 @@ def resolve_task_memory_commands(
 
 def build_task_memory(records, episode_result, trace_complete=True):
     """Build memory only from a fully verified successful rollout."""
+    action_records = [
+        record for record in records
+        if record.get("status") != "initialization_reset"
+    ]
     reasons: List[str] = []
     if float(episode_result.get("task_success", 0.0)) != 1.0:
         reasons.append("task_not_successful")
     if not trace_complete:
         reasons.append("trace_incomplete")
     expected_turns = episode_result.get("num_turns")
-    if expected_turns is not None and int(expected_turns) != len(records):
+    if expected_turns is not None and int(expected_turns) != len(action_records):
         reasons.append("trace_turn_count_mismatch")
     structural_errors = {
         "parse_error",
@@ -266,10 +270,10 @@ def build_task_memory(records, episode_result, trace_complete=True):
         "place_rejected",
         "no_progress_rejected",
     }
-    if any(record.get("status") in structural_errors for record in records):
+    if any(record.get("status") in structural_errors for record in action_records):
         reasons.append("structural_error_in_trace")
 
-    executed = [record for record in records if record.get("primitive")]
+    executed = [record for record in action_records if record.get("primitive")]
     if not executed:
         reasons.append("no_executed_primitives")
     if any(record.get("primitive_postcondition_met") is not True for record in executed):
@@ -300,8 +304,10 @@ def build_task_memory(records, episode_result, trace_complete=True):
         "classification": "paper-compatible",
         "instruction": str(episode_result.get("instruction", "")),
         "source": {
-            "turn_count": len(records),
-            "env_step_count": sum(len(record.get("step_results", [])) for record in records),
+            "turn_count": len(action_records),
+            "env_step_count": sum(
+                len(record.get("step_results", [])) for record in action_records
+            ),
             "trace_sha256": hashlib.sha256(canonical_trace.encode("utf-8")).hexdigest(),
             "commands_sha256": hashlib.sha256(canonical_commands.encode("utf-8")).hexdigest(),
         },
