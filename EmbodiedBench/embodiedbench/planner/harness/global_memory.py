@@ -17,9 +17,13 @@ import os
 import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List
+from typing import Any, Dict, List, Optional
 
-from embodiedbench.planner.harness.trace_io import load_complete_jsonl, write_json_atomic
+from embodiedbench.planner.harness.primitives import PRIMITIVE_NAMES
+from embodiedbench.planner.harness.trace_io import (
+    load_complete_jsonl_bytes,
+    write_json_atomic,
+)
 
 
 # Manual seed rules, adapted from the Harness VLA paper (Appendix A). These are
@@ -69,10 +73,11 @@ SEED_FAILURE_MODELS: List[str] = [
 
 @dataclass
 class GlobalMemory:
-    """Fixed-seed cross-task memory rendered into the planner prompt."""
+    """Cross-task memory rendered from a seed and promoted trace evidence."""
 
     success_rules: List[str] = field(default_factory=lambda: list(SEED_SUCCESS_RULES))
     failure_models: List[str] = field(default_factory=lambda: list(SEED_FAILURE_MODELS))
+    provenance: Dict[str, List[dict]] = field(default_factory=dict, repr=False)
 
     @classmethod
     def seeded(cls) -> "GlobalMemory":
@@ -93,6 +98,52 @@ class GlobalMemory:
             )
         except (OSError, json.JSONDecodeError, TypeError):
             return cls.seeded()
+
+    @classmethod
+    def from_ledger(
+        cls,
+        ledger_path: str,
+        *,
+        include_seed: bool = True,
+        base_memory: Optional["GlobalMemory"] = None,
+    ) -> "GlobalMemory":
+        """Render only promoted ledger entries, optionally after a seed/base."""
+        base = base_memory or cls.seeded()
+        memory = cls(
+            success_rules=list(base.success_rules) if include_seed else [],
+            failure_models=list(base.failure_models) if include_seed else [],
+        )
+        ledger = GlobalMemoryLedger.load(ledger_path, read_only=True)
+        content = {
+            "success_rule": memory.success_rules,
+            "failure_model": memory.failure_models,
+        }
+        canonical = {
+            _normalize_content(text): text
+            for values in content.values()
+            for text in values
+        }
+        for decision in ledger.decisions:
+            if decision.status != "promoted":
+                continue
+            candidate = decision.candidate
+            normalized = _normalize_content(candidate.text)
+            if normalized not in canonical:
+                canonical[normalized] = candidate.text.strip()
+                content[candidate.kind].append(canonical[normalized])
+            rendered_text = canonical[normalized]
+            memory.provenance.setdefault(rendered_text, []).append(
+                decision.to_dict()
+            )
+        return memory
+
+    def provenance_for(self, text: str) -> List[dict]:
+        """Return trace provenance for rendered content without exposing mutation."""
+        normalized = _normalize_content(text)
+        for rendered_text, provenance in self.provenance.items():
+            if _normalize_content(rendered_text) == normalized:
+                return [dict(item) for item in provenance]
+        return []
 
     def save(self, path: str) -> None:
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
@@ -127,6 +178,10 @@ class GlobalMemoryEvidence:
     text: str
     trace_sha256: str
     turns: tuple[int, ...]
+    trace_path: str = ""
+    primitive: str = ""
+    postcondition_met: Optional[bool] = None
+    structured_evidence: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.kind not in {"success_rule", "failure_model"}:
@@ -142,6 +197,12 @@ class GlobalMemoryEvidence:
             for turn in self.turns
         ):
             raise ValueError("evidence must reference positive trace turns")
+        if self.postcondition_met is not None and not isinstance(
+            self.postcondition_met, bool
+        ):
+            raise ValueError("postcondition_met must be true, false, or null")
+        if not isinstance(self.structured_evidence, dict):
+            raise ValueError("structured_evidence must be a mapping")
 
     @property
     def identity(self) -> str:
@@ -151,6 +212,10 @@ class GlobalMemoryEvidence:
                 "text": " ".join(self.text.split()),
                 "trace_sha256": self.trace_sha256,
                 "turns": list(self.turns),
+                "trace_path": self.trace_path,
+                "primitive": self.primitive,
+                "postcondition_met": self.postcondition_met,
+                "structured_evidence": self.structured_evidence,
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -164,14 +229,122 @@ class GlobalMemoryEvidence:
             "text": self.text,
             "trace_sha256": self.trace_sha256,
             "turns": list(self.turns),
+            "trace_path": self.trace_path,
+            "primitive": self.primitive,
+            "postcondition_met": self.postcondition_met,
+            "structured_evidence": self.structured_evidence,
         }
+
+
+def _normalize_content(text: str) -> str:
+    return " ".join(text.split()).casefold()
+
+
+@dataclass(frozen=True)
+class GlobalMemoryDecision:
+    """An explicit, deterministic disposition of one memory candidate."""
+
+    candidate: GlobalMemoryEvidence
+    status: str
+    reason: str
+
+    def __post_init__(self) -> None:
+        if self.status not in {"pending", "promoted", "rejected"}:
+            raise ValueError("decision status must be pending, promoted, or rejected")
+        if not self.reason.strip():
+            raise ValueError("decision reason must be non-empty")
+
+    @property
+    def kind(self) -> str:
+        return self.candidate.kind
+
+    def to_dict(self) -> dict:
+        return {
+            "candidate": self.candidate.to_dict(),
+            "status": self.status,
+            "reason": self.reason,
+        }
+
+
+def _candidate_from_dict(item: dict) -> GlobalMemoryEvidence:
+    return GlobalMemoryEvidence(
+        kind=item["kind"],
+        text=item["text"],
+        trace_sha256=item["trace_sha256"],
+        turns=tuple(item["turns"]),
+        trace_path=item.get("trace_path", ""),
+        primitive=item.get("primitive", ""),
+        postcondition_met=item.get("postcondition_met"),
+        structured_evidence=dict(item.get("structured_evidence", {})),
+    )
+
+
+def _decide_candidate(candidate: GlobalMemoryEvidence) -> GlobalMemoryDecision:
+    if not candidate.trace_path or not candidate.primitive or not candidate.structured_evidence:
+        return GlobalMemoryDecision(candidate, "rejected", "incomplete provenance")
+    if candidate.primitive not in PRIMITIVE_NAMES:
+        return GlobalMemoryDecision(candidate, "rejected", "unknown primitive")
+    if candidate.postcondition_met is None:
+        return GlobalMemoryDecision(candidate, "pending", "ambiguous postcondition")
+    if candidate.structured_evidence.get(
+        "primitive_postcondition_met"
+    ) is not candidate.postcondition_met:
+        return GlobalMemoryDecision(
+            candidate, "rejected", "structured outcome mismatch"
+        )
+    expected_kind = (
+        "success_rule" if candidate.postcondition_met else "failure_model"
+    )
+    if candidate.kind != expected_kind:
+        return GlobalMemoryDecision(candidate, "rejected", "outcome/category mismatch")
+    return GlobalMemoryDecision(
+        candidate,
+        "pending",
+        "awaiting semantically validated interpretation",
+    )
+
+
+def _trace_records_for_candidate(candidate: GlobalMemoryEvidence) -> List[dict]:
+    if not candidate.trace_path:
+        raise ValueError("Global Memory evidence has no trace path")
+    trace_path = Path(candidate.trace_path)
+    if not trace_path.is_file():
+        raise ValueError("Global Memory evidence trace does not exist")
+    payload = trace_path.read_bytes()
+    if not payload.endswith(b"\n"):
+        raise ValueError("Global Memory evidence trace is incomplete")
+    if hashlib.sha256(payload).hexdigest() != candidate.trace_sha256:
+        raise ValueError("Global Memory evidence trace hash mismatch")
+    return load_complete_jsonl_bytes(payload)
+
+
+def _validate_candidate_provenance(candidate: GlobalMemoryEvidence) -> None:
+    records = _trace_records_for_candidate(candidate)
+    for turn in candidate.turns:
+        matches = [record for record in records if record.get("turn") == turn]
+        if len(matches) != 1:
+            raise ValueError("Global Memory evidence turn must exist exactly once")
+        record = matches[0]
+        if record.get("primitive") != candidate.primitive:
+            raise ValueError("Global Memory evidence primitive mismatch")
+        if record.get("primitive_postcondition_met") is not candidate.postcondition_met:
+            raise ValueError("Global Memory evidence postcondition mismatch")
+        expected = {
+            "primitive_postcondition_met": record.get("primitive_postcondition_met"),
+            "termination_reason": record.get("termination_reason"),
+            "task_success": record.get("task_success"),
+            "episode_status": record.get("episode_status"),
+        }
+        if candidate.structured_evidence != expected:
+            raise ValueError("Global Memory structured evidence mismatch")
 
 
 @dataclass
 class GlobalMemoryLedger:
-    """Persist trace-backed memory candidates without silently promoting them."""
+    """Persist trace-backed candidates and explicit promotion decisions."""
 
     evidence: List[GlobalMemoryEvidence] = field(default_factory=list)
+    decisions: List[GlobalMemoryDecision] = field(default_factory=list)
     read_only: bool = False
 
     @classmethod
@@ -180,16 +353,30 @@ class GlobalMemoryLedger:
         if not ledger_path.exists():
             return cls(read_only=read_only)
         data = json.loads(ledger_path.read_text(encoding="utf-8"))
-        evidence = [
-            GlobalMemoryEvidence(
-                kind=item["kind"],
-                text=item["text"],
-                trace_sha256=item["trace_sha256"],
-                turns=tuple(item["turns"]),
-            )
-            for item in data.get("evidence", [])
-        ]
-        return cls(evidence=evidence, read_only=read_only)
+        schema_version = data.get("schema_version", 1)
+        if type(schema_version) is not int or schema_version not in {1, 2}:
+            raise ValueError("unsupported Global Memory ledger schema version")
+        if schema_version == 2:
+            decisions = []
+            for item in data.get("entries", []):
+                candidate = _candidate_from_dict(item["candidate"])
+                _validate_candidate_provenance(candidate)
+                decision = _decide_candidate(candidate)
+                if (item.get("status"), item.get("reason")) != (
+                    decision.status, decision.reason
+                ):
+                    raise ValueError(
+                        "persisted Global Memory decision violates promotion policy"
+                    )
+                decisions.append(decision)
+            evidence = [item.candidate for item in decisions]
+        else:
+            evidence = [_candidate_from_dict(item) for item in data.get("evidence", [])]
+            decisions = [_decide_candidate(item) for item in evidence]
+            for candidate in evidence:
+                if candidate.trace_path:
+                    _validate_candidate_provenance(candidate)
+        return cls(evidence=evidence, decisions=decisions, read_only=read_only)
 
     def add(self, candidate: GlobalMemoryEvidence) -> bool:
         if self.read_only:
@@ -198,25 +385,77 @@ class GlobalMemoryLedger:
             return False
         self.evidence.append(candidate)
         self.evidence.sort(key=lambda item: item.identity)
+        self.decisions.append(_decide_candidate(candidate))
+        self.decisions.sort(key=lambda item: item.candidate.identity)
         return True
+
+    def decision_for(self, candidate: GlobalMemoryEvidence) -> GlobalMemoryDecision:
+        for decision in self.decisions:
+            if decision.candidate.identity == candidate.identity:
+                return decision
+        raise KeyError(candidate.identity)
+
+    def audit(self) -> dict:
+        counts = {
+            "candidates": len(self.decisions),
+            "promoted": 0,
+            "rejected": 0,
+            "pending": 0,
+        }
+        for decision in self.decisions:
+            counts[decision.status] += 1
+        return {
+            "counts": counts,
+            "candidate_ids": [item.candidate.identity for item in self.decisions],
+        }
+
+    def process_trace(self, trace_path: str, *, run_status: str, ledger_path: str) -> dict:
+        """Classify a completed trace and atomically persist the canonical ledger."""
+        if self.read_only:
+            raise PermissionError("deployment Global Memory ledger is read-only")
+        trace_payload = Path(trace_path).read_bytes()
+        candidates = evidence_from_completed_trace_bytes(
+            trace_payload, trace_path=str(trace_path), run_status=run_status
+        )
+        added = sum(1 for candidate in candidates if self.add(candidate))
+        self.save(ledger_path)
+        audit = self.audit()
+        audit.update({
+            "trace_path": str(trace_path),
+            "trace_sha256": hashlib.sha256(trace_payload).hexdigest(),
+            "ledger_sha256": hashlib.sha256(Path(ledger_path).read_bytes()).hexdigest(),
+            "added": added,
+        })
+        return audit
 
     def save(self, path: str) -> None:
         if self.read_only:
             raise PermissionError("deployment Global Memory ledger is read-only")
-        write_json_atomic(path, {"evidence": [item.to_dict() for item in self.evidence]})
+        write_json_atomic(path, {
+            "schema_version": 2,
+            "entries": [item.to_dict() for item in self.decisions],
+        })
 
 
 def evidence_from_completed_trace(
     path: str, *, run_status: str
 ) -> List[GlobalMemoryEvidence]:
     """Extract structured candidates; promotion remains an explicit later decision."""
+    trace_path = Path(path)
+    return evidence_from_completed_trace_bytes(
+        trace_path.read_bytes(), trace_path=str(trace_path), run_status=run_status
+    )
+
+
+def evidence_from_completed_trace_bytes(
+    payload: bytes, *, trace_path: str, run_status: str
+) -> List[GlobalMemoryEvidence]:
+    """Extract candidates and provenance from one complete trace payload."""
     if run_status != "completed":
         raise ValueError("only a completed run can produce Global Memory evidence")
-    trace_path = Path(path)
-    payload = trace_path.read_bytes()
-    if payload and not payload.endswith(b"\n"):
+    if not payload.endswith(b"\n"):
         raise ValueError("incomplete trace cannot produce Global Memory evidence")
-    records = load_complete_jsonl(trace_path)
+    records = load_complete_jsonl_bytes(payload)
     if not records:
         raise ValueError("empty trace cannot produce Global Memory evidence")
     trace_sha256 = hashlib.sha256(payload).hexdigest()
@@ -224,12 +463,30 @@ def evidence_from_completed_trace(
     for index, record in enumerate(records, 1):
         reason = record.get("termination_reason")
         primitive = record.get("primitive", "primitive")
-        if record.get("primitive_postcondition_met") is False and reason:
+        if record.get("primitive_postcondition_met") in {True, False}:
+            if record.get("episode_status") != "completed":
+                raise ValueError(
+                    "Global Memory evidence requires completed episode records"
+                )
+            if "task_success" not in record:
+                raise ValueError(
+                    "Global Memory evidence requires task_success"
+                )
+        if record.get("primitive_postcondition_met") is False:
             candidates.append(GlobalMemoryEvidence(
                 kind="failure_model",
-                text=f"{primitive} ended with failed postcondition: {reason}.",
+                text=f"{primitive} did not satisfy its postcondition in the recorded physical state.",
                 trace_sha256=trace_sha256,
                 turns=(int(record.get("turn", index)),),
+                trace_path=trace_path,
+                primitive=primitive,
+                postcondition_met=False,
+                structured_evidence={
+                    "primitive_postcondition_met": False,
+                    "termination_reason": reason,
+                    "task_success": record.get("task_success"),
+                    "episode_status": record.get("episode_status"),
+                },
             ))
         elif record.get("primitive_postcondition_met") is True:
             candidates.append(GlobalMemoryEvidence(
@@ -237,5 +494,14 @@ def evidence_from_completed_trace(
                 text=f"{primitive} satisfied its postcondition in the recorded physical state.",
                 trace_sha256=trace_sha256,
                 turns=(int(record.get("turn", index)),),
+                trace_path=trace_path,
+                primitive=primitive,
+                postcondition_met=True,
+                structured_evidence={
+                    "primitive_postcondition_met": True,
+                    "termination_reason": reason,
+                    "task_success": record.get("task_success"),
+                    "episode_status": record.get("episode_status"),
+                },
             ))
     return candidates

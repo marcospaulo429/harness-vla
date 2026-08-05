@@ -82,7 +82,11 @@ def load_complete_jsonl(path):
     trace_path = Path(path)
     if not trace_path.exists():
         return []
-    payload = trace_path.read_bytes()
+    return load_complete_jsonl_bytes(trace_path.read_bytes())
+
+
+def load_complete_jsonl_bytes(payload):
+    """Load JSONL records from one immutable byte payload."""
     lines = payload.splitlines(keepends=True)
     records = []
     for index, raw_line in enumerate(lines):

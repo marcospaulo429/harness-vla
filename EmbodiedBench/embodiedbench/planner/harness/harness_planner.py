@@ -154,6 +154,11 @@ class HarnessPlanner:
         self.planner_steps = 0
         self.output_json_error = 0
 
+    def set_global_memory(self, global_memory: GlobalMemory) -> None:
+        """Replace memory and rebuild the system prompt from the same snapshot."""
+        self.global_memory = global_memory
+        self.system_prompt = build_system_prompt(global_memory.render())
+
     def reset(self) -> None:
         self.planner_steps = 0
         self.output_json_error = 0

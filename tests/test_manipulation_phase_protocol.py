@@ -103,6 +103,75 @@ def test_deployment_memory_writer_is_blocked_before_fake_writer(evaluator_class)
     assert calls == []
 
 
+def test_deployment_ledger_processing_is_blocked_before_mutation(
+    tmp_path, evaluator_class
+):
+    ledger_path = tmp_path / 'ledger.json'
+    ledger_path.write_text('{"schema_version":2,"entries":[]}', encoding='utf-8')
+    trace_path = tmp_path / 'trace.jsonl'
+    trace_path.write_text(json.dumps({
+        'turn': 1,
+        'primitive': 'move_to',
+        'termination_reason': 'postcondition_met',
+        'primitive_postcondition_met': True,
+        'task_success': 1,
+        'episode_status': 'completed',
+    }) + '\n', encoding='utf-8')
+    evaluator = evaluator_class(_config(
+        global_memory_ledger_path=str(ledger_path)
+    ))
+    before = ledger_path.read_bytes()
+
+    with pytest.raises(ValueError, match='memory writes are forbidden'):
+        evaluator.process_global_memory_trace(
+            101, trace_path, run_status='completed'
+        )
+
+    assert ledger_path.read_bytes() == before
+
+
+def test_bootstrap_collects_pending_without_changing_rendered_hash(
+    tmp_path, evaluator_class
+):
+    ledger_path = tmp_path / 'ledger.json'
+    trace_path = tmp_path / 'trace.jsonl'
+    trace_path.write_text(json.dumps({
+        'turn': 1,
+        'primitive': 'move_to',
+        'termination_reason': 'postcondition_met',
+        'primitive_postcondition_met': True,
+        'task_success': 1,
+        'episode_status': 'completed',
+    }) + '\n', encoding='utf-8')
+    evaluator = evaluator_class(_config(
+        protocol_phase='bootstrap',
+        selected_indexes=[9],
+        episode_protocol_seeds=[7],
+        global_memory_ledger_path=str(ledger_path),
+    ))
+    evaluator.planner = SimpleNamespace(global_memory=GlobalMemory.seeded())
+    evaluator._protocol_memory_before = evaluator._memory_hashes(
+        evaluator.planner.global_memory
+    )
+    rendered_before = evaluator.planner.global_memory.render()
+
+    audit = evaluator.process_global_memory_trace(
+        7, trace_path, run_status='completed'
+    )
+
+    hashes_after = evaluator._memory_hashes(evaluator.planner.global_memory)
+    assert audit['counts'] == {
+        'candidates': 1, 'promoted': 0, 'rejected': 0, 'pending': 1,
+    }
+    assert hashes_after['global_memory_ledger_sha256'] is not None
+    assert evaluator._protocol_memory_before['global_memory_ledger_sha256'] is None
+    assert (
+        hashes_after['global_memory_rendered_sha256']
+        == evaluator._protocol_memory_before['global_memory_rendered_sha256']
+    )
+    assert evaluator.planner.global_memory.render() == rendered_before
+
+
 def test_bootstrap_episode_is_kept_but_excluded_from_summary(
     tmp_path, evaluator_class
 ):
@@ -139,5 +208,27 @@ def test_deployment_hashes_use_loaded_content_and_must_not_change(evaluator_clas
     assert evaluator._protocol_memory_after == evaluator._protocol_memory_before
 
     memory.success_rules.append('mutated')
+    with pytest.raises(RuntimeError, match='deployment memory changed'):
+        evaluator._verify_deployment_memory_unchanged()
+
+
+def test_deployment_detects_external_ledger_mutation_before_metric(
+    tmp_path, evaluator_class
+):
+    ledger_path = tmp_path / 'ledger.json'
+    ledger_path.write_text(
+        '{"schema_version":2,"entries":[]}', encoding='utf-8'
+    )
+    evaluator = evaluator_class(_config(
+        global_memory_ledger_path=str(ledger_path)
+    ))
+    evaluator.planner = SimpleNamespace(global_memory=GlobalMemory.seeded())
+    evaluator._protocol_memory_before = evaluator._memory_hashes(
+        evaluator.planner.global_memory
+    )
+    ledger_path.write_text(
+        '{"schema_version":2,"entries":[]}\n', encoding='utf-8'
+    )
+
     with pytest.raises(RuntimeError, match='deployment memory changed'):
         evaluator._verify_deployment_memory_unchanged()

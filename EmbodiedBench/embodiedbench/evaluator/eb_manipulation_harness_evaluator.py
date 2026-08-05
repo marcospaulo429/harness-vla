@@ -21,6 +21,7 @@ import json
 import math
 import socket
 from datetime import datetime, timezone
+from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageDraw
@@ -34,7 +35,10 @@ from embodiedbench.envs.eb_manipulation.rgbd_grounding import (
     compute_oracle_metrics,
     summarize_oracle_frames,
 )
-from embodiedbench.planner.harness.global_memory import GlobalMemory
+from embodiedbench.planner.harness.global_memory import (
+    GlobalMemory,
+    GlobalMemoryLedger,
+)
 from embodiedbench.planner.harness.harness_planner import HarnessPlanner
 from embodiedbench.planner.harness.task_memory import (
     load_task_memory,
@@ -139,7 +143,25 @@ class EB_ManipulationHarnessEvaluator:
         self.episode_protocol_seeds = ()
         self._protocol_memory_before = None
         self._protocol_memory_after = None
+        self.global_memory_ledger_path = (
+            config.get('global_memory_ledger_path', '') or ''
+        )
+        self.global_memory_include_seed = config.get(
+            'global_memory_include_seed', True
+        )
+        if not isinstance(self.global_memory_include_seed, bool):
+            raise ValueError('global_memory_include_seed must be boolean')
+        self.global_memory_audit = {
+            'path': self.global_memory_ledger_path,
+            'decision': (
+                'not_configured' if not self.global_memory_ledger_path else 'configured'
+            ),
+        }
         self._configure_phase_protocol()
+        if self.global_memory_ledger_path and self.phase_policy is None:
+            raise ValueError(
+                'global_memory_ledger_path requires bootstrap or deployment phase'
+            )
         self.grasp_thresholds = {
             'object_lift_threshold': config.get('grasp_object_lift_threshold', 3.0),
             'max_gripper_object_distance': config.get('grasp_max_distance', 8.0),
@@ -256,14 +278,76 @@ class EB_ManipulationHarnessEvaluator:
         }
 
     def write_memory(self, protocol_seed, writer, *args, **kwargs):
-        """Guard a future memory writer without implementing memory promotion."""
+        """Run a memory writer only after validating phase and seed."""
         if self.phase_manifest is not None:
             self.phase_manifest.guard_operation(
                 self.phase_policy.phase, protocol_seed, PhaseOperation.WRITE_MEMORY
             )
         return writer(*args, **kwargs)
 
+    def _load_global_memory(self):
+        base_memory = GlobalMemory.load(self.config.get('global_memory_path', ''))
+        if not self.global_memory_ledger_path:
+            return base_memory
+        memory = GlobalMemory.from_ledger(
+            self.global_memory_ledger_path,
+            include_seed=self.global_memory_include_seed,
+            base_memory=base_memory,
+        )
+        ledger = GlobalMemoryLedger.load(
+            self.global_memory_ledger_path,
+            read_only=self.phase_policy.phase is Phase.DEPLOYMENT,
+        )
+        ledger_sha256 = None
+        if os.path.exists(self.global_memory_ledger_path):
+            with open(self.global_memory_ledger_path, 'rb') as ledger_file:
+                ledger_sha256 = hashlib.sha256(ledger_file.read()).hexdigest()
+        self.global_memory_audit = ledger.audit()
+        self.global_memory_audit.update({
+            'path': self.global_memory_ledger_path,
+            'decision': 'loaded_validated_ledger',
+            'read_only': ledger.read_only,
+            'ledger_sha256': ledger_sha256,
+            'rendered_sha256': self._memory_hashes(memory)[
+                'global_memory_rendered_sha256'
+            ],
+        })
+        return memory
+
+    def process_global_memory_trace(
+        self, protocol_seed, trace_path, *, run_status
+    ):
+        """Process one complete bootstrap trace behind the phase writer guard."""
+        if not self.global_memory_ledger_path:
+            raise ValueError('global_memory_ledger_path is not configured')
+
+        def process():
+            ledger = GlobalMemoryLedger.load(self.global_memory_ledger_path)
+            audit = ledger.process_trace(
+                trace_path,
+                run_status=run_status,
+                ledger_path=self.global_memory_ledger_path,
+            )
+            memory = self._load_global_memory()
+            memory_setter = getattr(self.planner, 'set_global_memory', None)
+            if callable(memory_setter):
+                memory_setter(memory)
+            else:
+                self.planner.global_memory = memory
+            audit['rendered_sha256'] = self._memory_hashes(memory)[
+                'global_memory_rendered_sha256'
+            ]
+            self.global_memory_audit = audit
+            return audit
+
+        return self.write_memory(protocol_seed, process)
+
     def _memory_hashes(self, global_memory):
+        ledger_sha256 = None
+        if self.global_memory_ledger_path:
+            ledger_path = Path(self.global_memory_ledger_path)
+            if ledger_path.is_file():
+                ledger_sha256 = hashlib.sha256(ledger_path.read_bytes()).hexdigest()
         return {
             'task_memory_sha256': (
                 self._structured_sha256(self._task_memory_payload)
@@ -272,6 +356,7 @@ class EB_ManipulationHarnessEvaluator:
             'global_memory_rendered_sha256': self._structured_sha256(
                 {'rendered': global_memory.render()}
             ),
+            'global_memory_ledger_sha256': ledger_sha256,
         }
 
     def _verify_deployment_memory_unchanged(self):
@@ -313,6 +398,7 @@ class EB_ManipulationHarnessEvaluator:
 
     def save_trace_summary(self):
         summary = summarize_trace_records(load_complete_jsonl(self._trace_path()))
+        summary['global_memory'] = dict(self.global_memory_audit)
         filename = 'trace_summary_episode_{}.json'.format(self.env._current_episode_num)
         with open(os.path.join(self._results_dir(), filename), 'w', encoding='utf-8') as file:
             json.dump(summary, file, ensure_ascii=False)
@@ -342,6 +428,7 @@ class EB_ManipulationHarnessEvaluator:
             ),
             'memory_hashes_before': self._protocol_memory_before,
             'memory_hashes_after': self._protocol_memory_after,
+            'global_memory': dict(self.global_memory_audit),
         }
         if error is not None:
             manifest['error'] = {
@@ -1319,10 +1406,22 @@ class EB_ManipulationHarnessEvaluator:
             episode_info['task_memory'] = dict(self.task_memory_episode_audit)
             episode_info['protocol'] = dict(self.current_episode_protocol)
             episode_info['memory_hashes_before'] = self._protocol_memory_before
-            episode_info['memory_hashes_after'] = (
-                self._memory_hashes(self.planner.global_memory)
-                if self.phase_manifest is not None else None
-            )
+            if (
+                self.global_memory_ledger_path
+                and self.phase_policy is not None
+                and self.phase_policy.phase is Phase.BOOTSTRAP
+            ):
+                for record in trace:
+                    record['task_success'] = info['task_success']
+                    record['episode_status'] = 'completed'
+                self.save_trace(trace)
+                self.process_global_memory_trace(
+                    self.current_episode_protocol['protocol_seed'],
+                    self._trace_path(),
+                    run_status='completed',
+                )
+            self._verify_deployment_memory_unchanged()
+            episode_info['memory_hashes_after'] = self._protocol_memory_after
             self.save_episode_metric(episode_info)
             self.save_trace_summary()
             progress_bar.update()
@@ -1367,7 +1466,7 @@ class EB_ManipulationHarnessEvaluator:
                 log_path=self.log_path,
             )
             self.env._max_episode_steps = self.max_env_steps
-            global_memory = GlobalMemory.load(self.config.get('global_memory_path', ''))
+            global_memory = self._load_global_memory()
             self._protocol_memory_before = self._memory_hashes(global_memory)
             self._protocol_memory_after = None
             self.planner = HarnessPlanner(

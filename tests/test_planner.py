@@ -31,6 +31,23 @@ def test_render_includes_rules():
     assert "empty grasp" in text.lower()
 
 
+def test_set_global_memory_rebuilds_system_prompt():
+    planner = HarnessPlanner(
+        model_name="fake",
+        client=_FakeClient("unused"),
+        global_memory=GlobalMemory(
+            success_rules=["legacy-memory-sentinel"], failure_models=[]
+        ),
+    )
+
+    planner.set_global_memory(
+        GlobalMemory(success_rules=["promoted-memory-sentinel"], failure_models=[])
+    )
+
+    assert "promoted-memory-sentinel" in planner.system_prompt
+    assert "legacy-memory-sentinel" not in planner.system_prompt
+
+
 def test_save_and_load_roundtrip(tmp_path):
     path = tmp_path / "gm.json"
     gm = GlobalMemory(success_rules=["r1"], failure_models=["f1"])
