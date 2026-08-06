@@ -269,7 +269,15 @@ def run_libero_multi_turn_episode(
                 "execute_observe_feedback_replan",
                 "vla_act_move_to_release_roles",
                 "official_task_success_termination",
-            ],
+            ]
+            + (["bootstrap_deployment_separation"] if phase_manifest is not None else [])
+            + (["file_mediated_repl"] if file_repl_dir is not None else [])
+            + (["visual_rgbd_world_grounding"] if visual_locator is not None else [])
+            + (
+                ["task_specific_memory", "global_memory"]
+                if deployment_memory_session is not None
+                else []
+            ),
             "paper_compatible": [
                 "in_process_loop",
                 "rgbd_target_mode_resolution",
@@ -284,8 +292,8 @@ def run_libero_multi_turn_episode(
                 ]
             ),
         },
-        "task_memory": False,
-        "global_memory": False,
+        "task_memory": deployment_memory_session is not None,
+        "global_memory": deployment_memory_session is not None,
         "perception": (
             "visual_rgbd_locator"
             if visual_locator is not None

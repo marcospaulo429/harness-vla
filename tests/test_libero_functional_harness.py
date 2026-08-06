@@ -245,6 +245,15 @@ def test_bootstrap_deployment_composes_functional_harness(tmp_path):
     assert run_manifest["phase"] == "deployment"
     assert run_manifest["reportable"] is True
     assert run_manifest["harness_complete"] is True
+    assert run_manifest["task_memory"] is True
+    assert run_manifest["global_memory"] is True
+    assert {
+        "bootstrap_deployment_separation",
+        "file_mediated_repl",
+        "visual_rgbd_world_grounding",
+        "task_specific_memory",
+        "global_memory",
+    }.issubset(run_manifest["scientific_classification"]["paper_confirmed"])
     assert run_manifest["privileged_segmentation"] is False
     assert run_manifest["privileged_contact_state"] is False
     assert run_manifest["scientific_classification"]["beta_only"] == [
