@@ -137,6 +137,36 @@ def test_deployment_context_guards_and_hash_finalizer(tmp_path):
     json.dumps(final)
 
 
+def test_deployment_validates_relative_bootstrap_trace_after_cwd_change(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    trace_path, episode_path = _write_episode(tmp_path)
+    result = bootstrap_memories(
+        _manifest(), seed=7,
+        trace_path=trace_path.name,
+        episode_result_path=episode_path.name,
+        task_memory_dir="task_memory",
+        global_ledger_path="global_ledger.json",
+    )
+    promote_global_memory(
+        "global_ledger.json",
+        candidate_id=result.audit["global_memory"]["candidate_ids"][0],
+        semantic_interpretation="Ground the symbolic target before contact.",
+    )
+
+    other_cwd = tmp_path / "other"
+    other_cwd.mkdir()
+    monkeypatch.chdir(other_cwd)
+    session = prepare_deployment(
+        _manifest(), seed=101,
+        task_memory_dir=str(tmp_path / "task_memory"),
+        global_ledger_path=str(tmp_path / "global_ledger.json"),
+    )
+
+    assert session.seed == 101
+
+
 def test_deployment_rejects_non_held_out_seed_and_detects_tamper(tmp_path):
     result, task_dir, ledger_path = _bootstrap(tmp_path)
     promote_global_memory(

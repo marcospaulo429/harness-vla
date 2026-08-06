@@ -65,23 +65,24 @@ def bootstrap_memories(
     validate_phase_manifest(manifest)
     manifest.guard_operation(Phase.BOOTSTRAP, seed, PhaseOperation.WRITE_MEMORY)
     policy = manifest.policy_for(Phase.BOOTSTRAP)
-    trace = Path(trace_path)
+    trace = Path(trace_path).resolve()
     turn_count = _trace_turn_count(trace)
     if turn_count > policy.budget:
         raise ValueError("bootstrap trace exceeds phase budget")
 
-    episode_result = Path(episode_result_path)
+    episode_result = Path(episode_result_path).resolve()
     episode = json.loads(episode_result.read_text(encoding="utf-8"))
     episode_seed = episode.get("seed")
     if episode_seed is not None and episode_seed != seed:
         raise ValueError("episode seed does not match bootstrap seed")
 
     task_decision = promote_task_memory(
-        trace, episode_result_path, task_memory_dir
+        trace, episode_result, Path(task_memory_dir).resolve()
     )
-    ledger = GlobalMemoryLedger.load(global_ledger_path)
+    ledger_path = Path(global_ledger_path).resolve()
+    ledger = GlobalMemoryLedger.load(ledger_path)
     global_audit = ledger.process_trace(
-        trace, run_status=run_status, ledger_path=global_ledger_path
+        trace, run_status=run_status, ledger_path=ledger_path
     )
     audit = {
         "schema_version": 1,
@@ -210,8 +211,8 @@ def prepare_deployment(
     """Load held-out, immutable Task and promoted Global Memory context."""
     validate_phase_manifest(manifest)
     manifest.guard_operation(Phase.DEPLOYMENT, seed, PhaseOperation.READ_MEMORY)
-    memory_dir = Path(task_memory_dir)
-    ledger_path = Path(global_ledger_path)
+    memory_dir = Path(task_memory_dir).resolve()
+    ledger_path = Path(global_ledger_path).resolve()
     if not ledger_path.is_file():
         raise ValueError("Global Memory ledger does not exist")
     audit, commands = load_task_memory(memory_dir)
