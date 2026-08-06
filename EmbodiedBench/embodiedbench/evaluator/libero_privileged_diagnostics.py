@@ -147,7 +147,9 @@ class LiberoPrivilegedDiagnostics:
         except Exception as exc:
             errors["objects"] = _error(exc)
         if held_pose is not None and destination_pose is not None:
-            clauses["object_above_destination"] = held_pose["position"][2] > destination_pose["position"][2]
+            clauses["object_above_destination"] = (
+                held_pose["position"][2] >= destination_pose["position"][2]
+            )
             try:
                 delta_x = held_pose["position"][0] - destination_pose["position"][0]
                 delta_y = held_pose["position"][1] - destination_pose["position"][1]

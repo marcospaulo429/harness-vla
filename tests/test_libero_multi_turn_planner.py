@@ -127,6 +127,7 @@ def test_planner_turn_contains_semantic_state_without_pose_or_oracle():
     assert "exactly one JSON primitive" in MULTI_TURN_SYSTEM_PROMPT
     assert "do not repeat it" in MULTI_TURN_SYSTEM_PROMPT
     assert "release is the primitive that opens the gripper" in MULTI_TURN_SYSTEM_PROMPT
+    assert "do not issue a one-chunk probe" in MULTI_TURN_SYSTEM_PROMPT
 
 
 def test_planner_turn_includes_symbolic_memory_context_and_rejects_pose_data():

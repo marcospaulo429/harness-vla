@@ -31,7 +31,9 @@ does not imply task success. A successful move_to means that target and mode
 already hold; do not repeat it unless feedback reports a failure or state
 change. If release_pose succeeded while holding an object and task success is
 false, release is the primitive that opens the gripper. Use the latest feedback
-to choose the next action."""
+to choose the next action. For a contact attempt, use the available max_chunks
+cap; tau already returns early, so do not issue a one-chunk probe before the
+same contact prompt."""
 
 
 def _valid_cap(value: int, name: str) -> None:
