@@ -50,6 +50,8 @@ def _execution(
 
 
 class _ScriptedPlanner:
+    last_thinking = "scripted thinking"
+
     def __init__(self, invocations):
         self.invocations = list(invocations)
         self.calls = []
@@ -219,6 +221,7 @@ def test_previous_feedback_to_planner_has_no_physical_pose_leakage(tmp_path):
     encoded_state = json.dumps(second_state)
     assert second_state["holding"] == "akita_black_bowl_1"
     assert second_state["last_feedback"]["tau_satisfied"] is True
+    assert second_state["last_feedback"]["target"] == "akita_black_bowl_1"
     assert "robot0_eef_pos" not in encoded_state
     assert "physical_pose" not in encoded_state
     assert "contact" not in encoded_state
@@ -397,6 +400,7 @@ def test_planner_parse_error_is_traced_without_dispatch(tmp_path):
         {
             "turn": 1,
             "planner_raw_output": "not json",
+            "planner_thinking": "scripted thinking",
             "invocation": None,
             "feedback": {
                 "action": None,
@@ -429,6 +433,7 @@ def test_trace_has_one_reconstructable_record_per_turn(tmp_path):
     assert [record["turn"] for record in records] == [1, 2, 3, 4]
     assert [record["invocation"] for record in records] == _happy_script()
     assert all("planner_raw_output" in record for record in records)
+    assert all(record["planner_thinking"] == "scripted thinking" for record in records)
     assert all("primitive_trace" in record for record in records)
     assert all(
         set(record["feedback"])
@@ -442,3 +447,5 @@ def test_trace_has_one_reconstructable_record_per_turn(tmp_path):
         }
         for record in records
     )
+    assert records[2]["feedback"]["target"] == "plate_1"
+    assert records[2]["feedback"]["mode"] == "release_pose"

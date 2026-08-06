@@ -130,6 +130,7 @@ class LiberoMultiTurnEvaluator:
                 available_targets=available_targets,
                 max_chunks_cap=min(budgets.max_chunks_cap, actions_remaining),
             )
+            planner_thinking = getattr(self.planner, "last_thinking", None)
 
             if invocation is None:
                 feedback = self._feedback(
@@ -142,7 +143,9 @@ class LiberoMultiTurnEvaluator:
                     current_holding,
                     False,
                 )
-                self._record(turn_index, raw_output, None, feedback, [])
+                self._record(
+                    turn_index, raw_output, planner_thinking, None, feedback, []
+                )
                 return self._result(
                     current_observation,
                     current_holding,
@@ -166,7 +169,14 @@ class LiberoMultiTurnEvaluator:
                     current_holding,
                     False,
                 )
-                self._record(turn_index, raw_output, invocation, feedback, [])
+                self._record(
+                    turn_index,
+                    raw_output,
+                    planner_thinking,
+                    invocation,
+                    feedback,
+                    [],
+                )
                 return self._result(
                     current_observation,
                     current_holding,
@@ -193,7 +203,14 @@ class LiberoMultiTurnEvaluator:
                     current_holding,
                     False,
                 )
-                self._record(turn_index, raw_output, invocation, feedback, [])
+                self._record(
+                    turn_index,
+                    raw_output,
+                    planner_thinking,
+                    invocation,
+                    feedback,
+                    [],
+                )
                 return self._result(
                     current_observation,
                     current_holding,
@@ -246,9 +263,13 @@ class LiberoMultiTurnEvaluator:
                 recoverable,
                 tau_satisfied=tau_satisfied,
             )
+            for semantic_field in ("target", "mode"):
+                if semantic_field in invocation:
+                    feedback[semantic_field] = invocation[semantic_field]
             self._record(
                 turn_index,
                 raw_output,
+                planner_thinking,
                 invocation,
                 feedback,
                 execution.trace,
@@ -375,6 +396,7 @@ class LiberoMultiTurnEvaluator:
         self,
         turn: int,
         raw_output: str,
+        planner_thinking,
         invocation,
         feedback: Dict[str, Any],
         primitive_trace,
@@ -384,6 +406,7 @@ class LiberoMultiTurnEvaluator:
             {
                 "turn": turn,
                 "planner_raw_output": raw_output,
+                "planner_thinking": planner_thinking,
                 "invocation": invocation,
                 "feedback": feedback,
                 "primitive_trace": primitive_trace,

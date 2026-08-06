@@ -324,7 +324,25 @@ Razões de término mínimas:
 - Disco: 703 GB livres em `/home`.
 - Nenhum processo CoppeliaSim/LIBERO e nenhuma policy na porta 8000.
 - Policy server iniciado com `TORCH_COMPILE_DISABLE=1` e
-  `TORCHDYNAMO_DISABLE=1`; health check ainda pendente.
+  `TORCHDYNAMO_DISABLE=1`; health check retornou 5 ações 7D finitas em 3,541 s.
+
+### 2026-08-06 — Run diagnóstica 1
+
+- Tentativa `_1`: bootstrap falhou antes do simulador porque faltava o checkout
+  LIBERO no `PYTHONPATH`; nenhuma ação ou artifact científico foi produzido.
+- Run válida `_2`: task 0/state 0, seed 7, Gemma4:12b thinking, commit
+  `efb0a49`, 8 turnos e 95/220 ações.
+- Grasp: tau satisfeito no turno 2 após 57 ações, com holding correto.
+- Transporte: `move_to(plate_1, release_pose, close)` atingiu pós-condição.
+- Falha: planner repetiu o mesmo `move_to` nos turnos 3–8 e nunca emitiu
+  `release`; término correto em `max_turns_exhausted`, `task_success=false`.
+- Causa local: feedback ao planner continha a ação, mas omitia o target e modo
+  que já tinham atingido pós-condição.
+- Correção paper-compatible: feedback agora inclui target/modo sem pose; prompt
+  explica que uma pós-condição já satisfeita não deve ser repetida e a
+  affordance de `release`. A sequência continua sendo escolhida pelo planner.
+- Thinking passa a ser persistido por turno no trace para auditoria.
+- Testes focados após correção: `33 passed`.
 
 ## 12. Registro de validação
 
@@ -343,3 +361,6 @@ Razões de término mínimas:
 | Suíte completa | `pytest tests -q` | `338 passed` |
 | Diff | `git diff --check` | passou |
 | Preflight GPU/Ollama/disco/processos | comandos locais | passou |
+| Health check PiRLinf eager | inferência sintética | 5 ações 7D finitas |
+| Run `_2` | task 0/state 0 | falha de sequência; `0/1` task success |
+| Correção de feedback | planner/evaluator/runner | `33 passed` |

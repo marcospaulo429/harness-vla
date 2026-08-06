@@ -17,7 +17,11 @@ The only available primitives are:
 {"action":"release"}
 Choose from grounded target names only. Never emit xyz, joint commands, torques,
 numeric tolerances, success claims, or multiple primitives. Primitive success
-does not imply task success. Use the latest feedback to choose the next action."""
+does not imply task success. A successful move_to means that target and mode
+already hold; do not repeat it unless feedback reports a failure or state
+change. If release_pose succeeded while holding an object and task success is
+false, release is the primitive that opens the gripper. Use the latest feedback
+to choose the next action."""
 
 
 def _valid_cap(value: int, name: str) -> None:
