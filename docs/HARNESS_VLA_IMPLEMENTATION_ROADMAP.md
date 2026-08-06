@@ -1,6 +1,6 @@
 # Roadmap de implementação e avaliação do Harness VLA v2
 
-Atualizado em 2026-08-05. Este é o único documento de planejamento futuro do
+Atualizado em 2026-08-06. Este é o único documento de planejamento futuro do
 repositório. O estado consolidado está em `HARNESS_VLA_BETA_REPORT.md` e os
 resultados históricos em `docs/runs/`.
 
@@ -25,15 +25,15 @@ trace analisável e commit próprio.
 | Biblioteca fixa e guards | paper-confirmed | implementado | vocabulário LIBERO |
 | Pós-condições físicas | paper-confirmed | parcial avançado | cobertura uniforme |
 | Trace incremental | paper-confirmed/compatible | implementado | manifesto de eval |
-| Runtime `vla_act` por chunks | paper-confirmed | implementado | contrato planner-facing |
-| Backend pi0.5/RLinf | paper-confirmed | implementado | Harness LIBERO nativo |
+| Runtime `vla_act` por chunks | paper-confirmed | implementado | ampliar predicados `tau` |
+| Backend pi0.5/RLinf | paper-confirmed | smoke nativo validado | Harness LIBERO completo |
 | RGB-D/world map | paper-confirmed | parcial | remover `sim_mask`/oracle |
-| Task Specific Memory | paper-confirmed | offline | integrar no runtime |
-| Bootstrap/deployment | paper-confirmed | política pura | integrar no evaluator |
-| Global Memory incremental | paper-confirmed | ledger offline | promoção auditada |
+| Task Specific Memory | paper-confirmed | runtime fail-closed | lifecycle LIBERO |
+| Bootstrap/deployment | paper-confirmed | guards no evaluator | run LIBERO oficial |
+| Global Memory incremental | paper-confirmed | candidatos auditados | promoção causal |
 | REPL mediado por arquivos | paper-confirmed | ausente | worker fake idempotente |
-| Protocolos LIBERO/Pro | paper-confirmed | baseline smoke | comparação pareada |
-| EB-Navigation | beta-only | protótipo local | avaliar após P0 |
+| Protocolos LIBERO/Pro | paper-confirmed | baseline 20 rollouts + smokes | Harness pareado |
+| EB-Navigation | beta-only | 3 episódios, 2/3 | manter separado do P0 |
 
 ## 3. Fase I: fechar o lifecycle do método
 
@@ -136,6 +136,10 @@ Aceitação:
 - fake e backend real param exatamente no primeiro chunk elegível;
 - budget esgotado é continuação possível, não falso sucesso;
 - trace reconstrói integralmente a chamada.
+
+Estado em 2026-08-06: schema planner-facing, cap, trace e early return foram
+validados com pi0.5/RLinf real e Gemma thinking em task 0/state 0. O smoke usou
+somente `tau=task_success`; predicados de grasp/contato ainda faltam.
 
 ## 4. Fase II: reprodução funcional no LIBERO
 

@@ -1,6 +1,6 @@
 # Harness VLA beta: estado consolidado
 
-Atualizado em 2026-08-05. Fonte científica: **Harness VLA: Steering Frozen
+Atualizado em 2026-08-06. Fonte científica: **Harness VLA: Steering Frozen
 VLAs into Reliable Manipulation Primitives via Memory-Guided Agents**,
 arXiv:2607.08448v2.
 
@@ -16,9 +16,10 @@ A beta implementa o **núcleo arquitetural** do Harness VLA:
 
 Ela ainda não implementa integralmente o **núcleo experimental** que sustenta a
 contribuição do paper. Task Specific Memory, Global Memory incremental,
-bootstrap/deployment e percepção isolada existem como componentes parciais ou
-offline, mas ainda não formam um lifecycle completo em runs reais. Também não há
-Harness nativo no LIBERO para comparação pareada com o VLA direto.
+bootstrap/deployment e percepção isolada existem como componentes parciais,
+mas ainda não formam um lifecycle completo em runs reais. O caminho nativo no
+LIBERO já valida o VLA direto e uma invocação planner-facing, porém ainda não
+oferece as primitivas analíticas, RGB-D do planner ou memórias do Harness.
 
 Classificação correta do estado:
 
@@ -44,8 +45,8 @@ flowchart TD
     U[Instrução] --> P[Planner LLM]
     O[Observação atual] --> G[Grounding e estado físico]
     G --> P
-    TM[Task Specific Memory parcial] -.-> P
-    GM[Global Memory seed] --> P
+    TM[Task Specific Memory com guards] -.-> P
+    GM[Global Memory ledger] --> P
     P --> J[Uma primitiva JSON]
     J --> V[Validação e guards]
     V --> A[Primitivas analíticas]
@@ -98,6 +99,8 @@ Task Specific Memory:
 - comandos parametrizados simbolicamente;
 - carregamento por hash e re-grounding em coordenadas atuais;
 - rejeição de objeto ausente ou binding ambíguo.
+- integração fail-closed no runtime: memória inválida ou ambígua bloqueia o
+  planner e `env.step`.
 
 Ainda faltam retrieval automático, injeção no planner, execução guiada pela
 estrutura recuperada e uma seed real promovida por bootstrap.
@@ -108,6 +111,8 @@ Global Memory:
 - ledger offline com provenance até trace/turn;
 - deduplicação idempotente;
 - bloqueio de escrita em deployment.
+- validação de path, hash, turno, primitiva, outcome e evidência estruturada;
+- pós-condição booleana isolada permanece `pending`, sem promoção causal.
 
 Ainda faltam interpretação dos candidatos, promoção auditada e atualização
 iterativa durante bootstrap.
@@ -137,8 +142,7 @@ escolha de runtime **paper-compatible**, sem alterar os pesos frozen.
 
 ### 4.1 Testes leves
 
-- 189 testes passavam após a integração inicial do backend pi0.5/RLinf e das
-  correções de runtime.
+- 240 testes passam após a integração do planner-facing smoke LIBERO.
 - Há testes para primitivas, planner, grounding, traces, pós-condições, Task
   Memory, Global Memory ledger, phase policy e backends VLA.
 
@@ -169,6 +173,18 @@ Interpretação: checkpoint, normalização, observações e inferência estão
 funcionais no embodiment nativo. Ainda não é o protocolo completo do paper e
 não contém o Harness.
 
+Runs ampliadas e preservadas:
+
+- baseline repetida de 20 rollouts: `19/20` e `20/20`; a primeira reteve apenas
+  `11/20` vídeos por colisão de nomes, e a segunda reteve `20/20` MP4s válidos;
+- smoke VLA-only task 0/state 0: sucesso no chunk 16, 78 ações;
+- smoke planner-facing com Gemma thinking no mesmo task/state: invocação
+  `vla_act` válida, sucesso no chunk 16, 80 ações e zero parse errors.
+
+Os dois smokes têm `harness_complete=false`: validam o backend, o runtime por
+chunks, o predicado oficial e a auditoria, não o Harness completo. Relatório:
+`docs/runs/HARNESS_LIBERO_VLA_SMOKES_20260806.md`.
+
 ### 4.4 pi0.5/RLinf no EB-Manipulation
 
 A integração cross-embodiment produziu o primeiro grasp real verificado da beta.
@@ -184,12 +200,12 @@ ação não correspondem ao treinamento. Esse caminho é diagnóstico
 
 Prioridade P0 para uma reprodução funcional:
 
-1. integrar Task Specific Memory ao planner/evaluator;
-2. integrar bootstrap e deployment em runs reais;
+1. usar Task Specific Memory em um lifecycle LIBERO real;
+2. executar bootstrap e deployment com seeds oficiais no LIBERO;
 3. promover Global Memory a partir de evidência durante bootstrap;
 4. remover coordenadas e máscaras privilegiadas do payload do planner;
-5. expor e auditar integralmente `vla_act(prompt, max_chunks, tau)`;
-6. criar Harness nativo no LIBERO usando o mesmo checkpoint da baseline.
+5. ampliar `tau` além de `task_success` para os predicados publicados;
+6. completar o Harness LIBERO com primitivas analíticas e RGB-D/world maps.
 
 Prioridade P1 para fidelidade arquitetural:
 
