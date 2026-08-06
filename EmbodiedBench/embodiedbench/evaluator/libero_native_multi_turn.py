@@ -77,6 +77,41 @@ class LiberoNativeExecutionState:
     holding: Optional[str] = None
 
 
+class VisualLiftAndGraspMonitor:
+    """Infer lift-and-grasp from repeated visual RGB-D target grounding."""
+
+    def __init__(
+        self,
+        grounder: Grounder,
+        observation: Mapping[str, Any],
+        target: str,
+        minimum_lift_m: float = 0.03,
+    ) -> None:
+        self.grounder = grounder
+        self.target = target
+        self.minimum_lift_m = _positive_finite(minimum_lift_m, "minimum_lift_m")
+        self.baseline_z = float(grounder(observation, target)["world_xyz"][2])
+
+    def evaluate(self, observation: Mapping[str, Any]) -> Dict[str, Any]:
+        current_z = float(self.grounder(observation, self.target)["world_xyz"][2])
+        delta_z = current_z - self.baseline_z
+        return {
+            "predicate": "visual_lift_and_grasp",
+            "tau_satisfied": delta_z >= self.minimum_lift_m,
+            "target": self.target,
+            "lift": {
+                "baseline_target_z_m": self.baseline_z,
+                "current_target_z_m": current_z,
+                "delta_z_m": delta_z,
+                "minimum_lift_m": self.minimum_lift_m,
+                "threshold_met": delta_z >= self.minimum_lift_m,
+                "coordinate_source": "visual_rgbd_projection",
+            },
+            "privileged_contact_state": False,
+            "task_success_evaluated": False,
+        }
+
+
 def resolve_target_xyz(
     observation: Mapping[str, Any],
     target: str,
@@ -329,6 +364,7 @@ __all__ = [
     "LiberoNativeOffsets",
     "LiberoNativeExecutionState",
     "LiberoResolvedTarget",
+    "VisualLiftAndGraspMonitor",
     "make_native_move_executor",
     "make_native_release_executor",
     "make_native_vla_executor",

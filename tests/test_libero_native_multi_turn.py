@@ -10,6 +10,7 @@ from embodiedbench.evaluator.libero_native_multi_turn import (
     make_native_release_executor,
     make_native_vla_executor,
     resolve_target_xyz,
+    VisualLiftAndGraspMonitor,
 )
 from embodiedbench.planner.harness.libero_primitives import LiberoPrimitiveError
 from embodiedbench.planner.harness.pirlinf_backend import PiRLinfChunk
@@ -301,3 +302,24 @@ def test_tau_errors_fail_closed_remain_in_serializable_trace_and_never_hold():
         {"action_index": 2, "error": "grounding unavailable"},
     ]
     json.dumps(result.execution.trace)
+
+
+def test_visual_tau_uses_only_repeated_rgbd_height_without_contact_state():
+    heights = iter((0.40, 0.42, 0.44))
+    calls = []
+
+    def grounder(observation, target):
+        calls.append((observation["step"], target))
+        return {"world_xyz": [0.0, 0.0, next(heights)]}
+
+    monitor = VisualLiftAndGraspMonitor(
+        grounder, _observation(), "bowl", minimum_lift_m=0.03
+    )
+    first = monitor.evaluate(_observation(1))
+    second = monitor.evaluate(_observation(2))
+
+    assert first["tau_satisfied"] is False
+    assert second["tau_satisfied"] is True
+    assert second["privileged_contact_state"] is False
+    assert second["lift"]["coordinate_source"] == "visual_rgbd_projection"
+    assert calls == [(0, "bowl"), (1, "bowl"), (2, "bowl")]
