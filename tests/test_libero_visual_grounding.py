@@ -194,6 +194,8 @@ def test_ollama_request_sends_base64_png_as_gemma_vision_image(monkeypatch):
     payload = captured["payload"]
     assert payload["model"] == "gemma3:4b"
     assert payload["stream"] is False
+    assert payload["think"] is False
+    assert payload["options"]["num_predict"] == 256
     assert payload["messages"][0]["role"] == "user"
     assert "small red mug" in payload["messages"][0]["content"]
     encoded = payload["messages"][0]["images"][0]
@@ -201,5 +203,29 @@ def test_ollama_request_sends_base64_png_as_gemma_vision_image(monkeypatch):
     assert png.startswith(b"\x89PNG\r\n\x1a\n")
     decoded = np.asarray(Image.open(BytesIO(png)).convert("RGB"))
     np.testing.assert_array_equal(decoded, rgb)
+    np.testing.assert_allclose(selection.pixel_uv, [0.008, 0.008])
+    assert selection.coordinate_transform == "normalized_1000_to_image_pixels"
     assert selection.locator_model == "gemma3:4b"
     assert len(selection.prompt_hash) == 64
+
+
+def test_ollama_normalized_coordinates_are_converted_to_image_pixels(monkeypatch):
+    monkeypatch.setattr(
+        visual.request,
+        "urlopen",
+        lambda *_args, **_kwargs: _FakeHTTPResponse(
+            {
+                "message": {
+                    "content": '{"pixel_uv":[500,250],"confidence":0.9,"bbox":[250,0,750,500]}'
+                }
+            }
+        ),
+    )
+    locator = OllamaVisualPixelLocator("gemma4:12b")
+
+    selection = locator.locate(
+        _observation(np.zeros((101, 201, 3), dtype=np.uint8)), "black bowl"
+    )
+
+    np.testing.assert_allclose(selection.pixel_uv, [100.0, 25.0])
+    np.testing.assert_allclose(selection.bbox, [50.0, 0.0, 150.0, 50.0])

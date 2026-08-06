@@ -24,8 +24,9 @@ from embodiedbench.planner.harness.libero_grounding import (
 _DEFAULT_PROMPT = """Locate exactly one visible instance matching this description: {target}
 Return only a JSON object with exactly these fields:
 {{"pixel_uv":[u,v],"confidence":number,"bbox":[left,top,right,bottom]}}
-bbox is optional. Coordinates are zero-based RGB image pixels. If the target is absent or
-ambiguous, return confidence 0. Do not include markdown or any other fields."""
+bbox is optional. Coordinates use a normalized 0..1000 image grid, with [0,0] at the
+top-left and [1000,1000] at the bottom-right. If the target is absent or ambiguous,
+return confidence 0. Do not include markdown or any other fields."""
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,7 @@ class VisualPixelSelection:
     bbox: Optional[Sequence[float]] = None
     locator_model: Optional[str] = None
     prompt_hash: Optional[str] = None
+    coordinate_transform: Optional[str] = None
 
 
 class VisualPixelLocator(Protocol):
@@ -107,10 +109,11 @@ class OllamaVisualPixelLocator:
             "model": self.model,
             "stream": False,
             "format": "json",
+            "think": False,
             "messages": [
                 {"role": "user", "content": prompt, "images": [encoded_image]}
             ],
-            "options": {"temperature": 0},
+            "options": {"temperature": 0, "num_predict": 256},
         }
         api_request = request.Request(
             self.base_url + "/api/chat",
@@ -127,13 +130,16 @@ class OllamaVisualPixelLocator:
             content = response_payload["message"]["content"]
         except (KeyError, TypeError) as exc:
             raise LiberoGroundingError("Ollama response lacks message content") from exc
-        selection = self.parse_response(content)
+        selection = _normalized_selection_to_pixels(
+            self.parse_response(content), rgb.shape[1], rgb.shape[0]
+        )
         return VisualPixelSelection(
             pixel_uv=selection.pixel_uv,
             confidence=selection.confidence,
             bbox=selection.bbox,
             locator_model=self.model,
             prompt_hash=sha256(prompt.encode("utf-8")).hexdigest(),
+            coordinate_transform="normalized_1000_to_image_pixels",
         )
 
     def __call__(
@@ -226,6 +232,7 @@ def ground_visual_instance(
             "depth_sample_count": int(np.count_nonzero(robust_mask)),
             "locator_model": str(locator_model),
             "locator_prompt_hash": str(prompt_hash),
+            "locator_coordinate_transform": selection.coordinate_transform or "none",
             "pixel_selection": "visual_locator",
             "privileged_segmentation": False,
             "coordinate_source": "rgbd_projection",
@@ -243,6 +250,32 @@ def _validated_rgb(rgb) -> np.ndarray:
     if not array.shape[0] or not array.shape[1]:
         raise LiberoGroundingError("RGB must not be empty")
     return array
+
+
+def _normalized_selection_to_pixels(
+    selection: VisualPixelSelection, width: int, height: int
+) -> VisualPixelSelection:
+    values = list(selection.pixel_uv)
+    if not _is_number_pair(values) or any(value < 0.0 or value > 1000.0 for value in values):
+        raise LiberoGroundingError("visual locator normalized pixel is invalid")
+    pixel = [
+        float(values[0]) * (width - 1) / 1000.0,
+        float(values[1]) * (height - 1) / 1000.0,
+    ]
+    bbox = None
+    if selection.bbox is not None:
+        bounds = list(selection.bbox)
+        if not _is_number_sequence(bounds, 4) or any(
+            value < 0.0 or value > 1000.0 for value in bounds
+        ):
+            raise LiberoGroundingError("visual locator normalized bbox is invalid")
+        bbox = [
+            float(bounds[0]) * (width - 1) / 1000.0,
+            float(bounds[1]) * (height - 1) / 1000.0,
+            float(bounds[2]) * (width - 1) / 1000.0,
+            float(bounds[3]) * (height - 1) / 1000.0,
+        ]
+    return VisualPixelSelection(pixel, selection.confidence, bbox)
 
 
 def _is_number(value: Any) -> bool:
