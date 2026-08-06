@@ -103,7 +103,7 @@ def _unused_executor(*args, **kwargs):
     raise AssertionError("unexpected executor dispatch")
 
 
-def _run(tmp_path, vla_executor):
+def _run(tmp_path, vla_executor, *, privileged_diagnostics=False):
     run_root = tmp_path / "run"
     run_root.mkdir()
     return run_root, run_libero_multi_turn_episode(
@@ -126,6 +126,7 @@ def _run(tmp_path, vla_executor):
         move_executor=_unused_executor,
         release_executor=_unused_executor,
         video_writer=_write_video,
+        privileged_diagnostics=privileged_diagnostics,
     )
 
 
@@ -236,6 +237,7 @@ def test_video_manifest_flags_config_and_trace_have_expected_contract(tmp_path):
     ]
     assert manifest["privileged_segmentation"] is True
     assert manifest["privileged_contact_state"] is True
+    assert manifest["privileged_diagnostics"] is False
     assert manifest["planner_receives_oracle_coordinates"] is False
     assert manifest["planner_model"] == "fake-gemma"
     assert manifest["think"] is True
@@ -258,6 +260,33 @@ def test_video_manifest_flags_config_and_trace_have_expected_contract(tmp_path):
     assert "image" not in trace_text.lower()
     assert load_complete_jsonl(run_root / "trace.jsonl")[0]["turn"] == 1
     assert result["summary"]["budget_exhausted"] is True
+
+
+def test_explicit_privileged_diagnostics_flag_marks_manifest_and_trace(tmp_path):
+    def vla(invocation, observation, *, max_steps):
+        execution = LiberoPrimitiveExecution(
+            observation=observation,
+            primitive_success=True,
+            task_success=True,
+            termination_reason="task_success",
+            steps_executed=1,
+            trace=[],
+        )
+        return LiberoVLAExecution(execution, True, TARGET)
+
+    run_root, result = _run(tmp_path, vla, privileged_diagnostics=True)
+
+    assert result["manifest"]["privileged_diagnostics"] is True
+    assert "privileged_diagnostics" in result["manifest"][
+        "scientific_classification"
+    ]["beta_only"]
+    snapshot = load_complete_jsonl(run_root / "trace.jsonl")[0][
+        "privileged_diagnostics"
+    ][0]
+    assert snapshot["event"] == "post_grasp"
+    assert snapshot["source"] == "privileged_mujoco_state"
+    assert snapshot["beta_only"] is True
+    assert snapshot["eef_pose"]["value"] is None
 
 
 def test_executor_failure_preserves_trace_video_and_incomplete_manifest(tmp_path):

@@ -294,6 +294,52 @@ def test_previous_feedback_to_planner_has_no_physical_pose_leakage(tmp_path):
     assert "contact" not in encoded_state
 
 
+def test_privileged_diagnostics_persist_only_in_trace(tmp_path):
+    planner = _ScriptedPlanner(_happy_script())
+    executors = _FakeExecutors()
+    events = []
+
+    def diagnose(event, invocation, holding):
+        events.append(event)
+        return {
+            "event": event,
+            "source": "privileged_mujoco_state",
+            "beta_only": True,
+            "holding": holding,
+            "contact": {"bilateral": True},
+        }
+
+    trace_path = tmp_path / "turns.jsonl"
+    evaluator = LiberoMultiTurnEvaluator(
+        planner,
+        vla_executor=executors.vla,
+        move_executor=executors.move,
+        release_executor=executors.release,
+        trace_path=trace_path,
+        diagnostics_callback=diagnose,
+    )
+
+    evaluator.run(
+        "place the bowl on the plate",
+        {"frame": 0},
+        available_targets=TARGETS,
+        budgets=_budgets(),
+    )
+
+    records = load_complete_jsonl(trace_path)
+    assert events == ["post_grasp", "pre_release", "post_release"]
+    assert records[0]["privileged_diagnostics"][0]["event"] == "post_grasp"
+    assert [item["event"] for item in records[-1]["privileged_diagnostics"]] == [
+        "pre_release",
+        "post_release",
+    ]
+    assert all("privileged_diagnostics" not in call["state"] for call in planner.calls)
+    assert all(
+        "privileged" not in json.dumps(call["state"].get("last_feedback"))
+        for call in planner.calls
+    )
+
+
 def test_release_without_holding_is_blocked_without_executor_call(tmp_path):
     planner = _ScriptedPlanner([{"action": "release"}])
     executors = _FakeExecutors()

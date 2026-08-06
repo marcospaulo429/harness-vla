@@ -67,6 +67,7 @@ class LiberoMultiTurnResult:
 
 PrimitiveExecutor = Callable[..., LiberoPrimitiveExecution]
 VLAExecutor = Callable[..., LiberoVLAExecution]
+DiagnosticsCallback = Callable[[str, Dict[str, Any], Optional[str]], Dict[str, Any]]
 
 
 class LiberoMultiTurnEvaluator:
@@ -81,6 +82,7 @@ class LiberoMultiTurnEvaluator:
         release_executor: PrimitiveExecutor,
         trace_path,
         file_repl_bridge=None,
+        diagnostics_callback: Optional[DiagnosticsCallback] = None,
     ) -> None:
         self.planner = planner
         self.vla_executor = vla_executor
@@ -88,6 +90,7 @@ class LiberoMultiTurnEvaluator:
         self.release_executor = release_executor
         self.trace_path = Path(trace_path)
         self.file_repl_bridge = file_repl_bridge
+        self.diagnostics_callback = diagnostics_callback
 
     def run(
         self,
@@ -256,6 +259,12 @@ class LiberoMultiTurnEvaluator:
 
             tau_satisfied = None
             protocol_turn = None
+            privileged_diagnostics = []
+            holding_before = current_holding
+            if action == "release":
+                privileged_diagnostics.extend(
+                    self._diagnose("pre_release", invocation, holding_before)
+                )
             if self.file_repl_bridge is not None:
                 dispatched, protocol_turn = self.file_repl_bridge.dispatch(
                     invocation,
@@ -308,6 +317,15 @@ class LiberoMultiTurnEvaluator:
             ):
                 current_holding = None
 
+            if action == "vla_act" and current_holding is not None:
+                privileged_diagnostics.extend(
+                    self._diagnose("post_grasp", invocation, current_holding)
+                )
+            if action == "release":
+                privileged_diagnostics.extend(
+                    self._diagnose("post_release", invocation, holding_before)
+                )
+
             recoverable = bool(
                 not execution.task_success
                 and not env_done
@@ -339,6 +357,7 @@ class LiberoMultiTurnEvaluator:
                 roles,
                 protocol_metadata,
                 protocol_turn,
+                privileged_diagnostics,
             )
             primitive_success = execution.primitive_success
             last_action = action
@@ -496,6 +515,19 @@ class LiberoMultiTurnEvaluator:
             feedback["tau_satisfied"] = bool(tau_satisfied)
         return feedback
 
+    def _diagnose(self, event, invocation, holding):
+        if self.diagnostics_callback is None:
+            return []
+        try:
+            return [self.diagnostics_callback(event, invocation, holding)]
+        except Exception as exc:
+            return [{
+                "event": event,
+                "source": "privileged_mujoco_state",
+                "beta_only": True,
+                "error": {"type": type(exc).__name__, "message": str(exc)},
+            }]
+
     def _record(
         self,
         turn: int,
@@ -508,11 +540,10 @@ class LiberoMultiTurnEvaluator:
         object_roles: Dict[str, Sequence[str]],
         protocol_metadata: Optional[Dict[str, Any]] = None,
         protocol_turn: Optional[Dict[str, Any]] = None,
+        privileged_diagnostics=None,
     ) -> None:
         primitive = invocation.get("action") if isinstance(invocation, dict) else None
-        append_jsonl_record(
-            self.trace_path,
-            {
+        record = {
                 "turn": turn,
                 "planner_raw_output": raw_output,
                 "planner_thinking": planner_thinking,
@@ -533,7 +564,12 @@ class LiberoMultiTurnEvaluator:
                     "metadata": dict(protocol_metadata or {}),
                     "turn": protocol_turn,
                 },
-            },
+            }
+        if privileged_diagnostics:
+            record["privileged_diagnostics"] = privileged_diagnostics
+        append_jsonl_record(
+            self.trace_path,
+            record,
         )
 
     @staticmethod

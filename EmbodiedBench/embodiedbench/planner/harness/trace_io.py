@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import tempfile
 
 
 def initialize_jsonl(path):
@@ -28,24 +29,42 @@ def write_json_atomic(path, payload):
     """Replace a JSON file atomically after flushing its complete payload."""
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = output_path.with_name(output_path.name + ".tmp")
-    with temporary_path.open("w", encoding="utf-8") as output_file:
-        json.dump(payload, output_file, ensure_ascii=False)
-        output_file.flush()
-        os.fsync(output_file.fileno())
-    os.replace(temporary_path, output_path)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=str(output_path.parent), prefix=output_path.name + ".", suffix=".tmp"
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output_file:
+            json.dump(payload, output_file, ensure_ascii=False)
+            output_file.flush()
+            os.fsync(output_file.fileno())
+        os.replace(temporary_path, output_path)
+    finally:
+        try:
+            temporary_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def write_text_atomic(path, payload):
     """Replace a text file atomically after flushing its complete payload."""
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = output_path.with_name(output_path.name + ".tmp")
-    with temporary_path.open("w", encoding="utf-8") as output_file:
-        output_file.write(payload)
-        output_file.flush()
-        os.fsync(output_file.fileno())
-    os.replace(temporary_path, output_path)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=str(output_path.parent), prefix=output_path.name + ".", suffix=".tmp"
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output_file:
+            output_file.write(payload)
+            output_file.flush()
+            os.fsync(output_file.fileno())
+        os.replace(temporary_path, output_path)
+    finally:
+        try:
+            temporary_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def resolve_git_commit(start_path):

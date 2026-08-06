@@ -54,6 +54,7 @@ def parse_args():
     parser.add_argument("--visual-locator-model")
     parser.add_argument("--visual-locator-base-url", default="http://127.0.0.1:11434")
     parser.add_argument("--file-repl-dir", type=Path)
+    parser.add_argument("--privileged-diagnostics", action="store_true")
     parser.add_argument(
         "--output-root",
         type=Path,
@@ -173,6 +174,7 @@ def main():
             deployment_memory_session=memory_session,
             file_repl_dir=args.file_repl_dir,
             visual_locator=visual_locator,
+            privileged_diagnostics=args.privileged_diagnostics,
         )
         print("SUCCESS: %s" % result["episode"]["task_success"])
         print("ARTIFACTS: %s" % run_root)

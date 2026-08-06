@@ -18,6 +18,9 @@ from embodiedbench.evaluator.libero_file_repl_bridge import (
     LiberoProtocolMetadata,
 )
 from embodiedbench.evaluator.libero_memory_lifecycle import DeploymentMemorySession
+from embodiedbench.evaluator.libero_privileged_diagnostics import (
+    LiberoPrivilegedDiagnostics,
+)
 from embodiedbench.evaluator.libero_native_multi_turn import (
     LIBERO_ROTATION_TOLERANCE_RAD,
     LiberoNativeExecutionState,
@@ -190,6 +193,7 @@ def run_libero_multi_turn_episode(
     object_labels: Optional[Mapping[str, str]] = None,
     object_roles: Optional[Mapping[str, Sequence[str]]] = None,
     reset_environment: Optional[bool] = None,
+    privileged_diagnostics: bool = False,
 ) -> Dict[str, Any]:
     """Run one episode and durably persist its manifest, trace, video and result."""
     root = Path(run_root)
@@ -303,7 +307,8 @@ def run_libero_multi_turn_episode(
                     "privileged_contact_state",
                     "guarded_libero_workspace_and_rotation_ranges",
                 ]
-            ),
+            )
+            + (["privileged_diagnostics"] if privileged_diagnostics else []),
         },
         "task_memory": deployment_memory_session is not None,
         "global_memory": deployment_memory_session is not None,
@@ -314,6 +319,7 @@ def run_libero_multi_turn_episode(
         ),
         "privileged_segmentation": visual_locator is None,
         "privileged_contact_state": visual_locator is None,
+        "privileged_diagnostics": bool(privileged_diagnostics),
         "planner_receives_oracle_coordinates": False,
         "task_suite": task_suite,
         "task_id": task_id,
@@ -447,6 +453,15 @@ def run_libero_multi_turn_episode(
             release_executor=active_release_executor,
             trace_path=root / "trace.jsonl",
             file_repl_bridge=file_repl_bridge,
+            diagnostics_callback=(
+                LiberoPrivilegedDiagnostics(
+                    env,
+                    available_targets=targets,
+                    object_roles=roles,
+                )
+                if privileged_diagnostics
+                else None
+            ),
         )
         result = evaluator.run(
             instruction.strip(),
