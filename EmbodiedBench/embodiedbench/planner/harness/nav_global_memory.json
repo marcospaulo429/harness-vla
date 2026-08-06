@@ -1,0 +1,11 @@
+{
+  "success_rules": [
+    "Prefer actions that reduce the reported distance to the goal; keep useful headings while distance decreases.",
+    "Use short movement bursts and replan from fresh execution feedback instead of committing to a long open-loop route.",
+    "Use camera tilt only to inspect the scene; restore a useful forward view before translating when needed."
+  ],
+  "failure_models": [
+    "If a movement fails because of a collision, rotate and try a different route rather than repeating the blocked action.",
+    "If distance increases after movement, reverse or change direction and use the previous lower-distance state as evidence."
+  ]
+}
