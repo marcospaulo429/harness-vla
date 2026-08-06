@@ -19,6 +19,7 @@ from embodiedbench.evaluator.libero_file_repl_bridge import (
 )
 from embodiedbench.evaluator.libero_memory_lifecycle import DeploymentMemorySession
 from embodiedbench.evaluator.libero_native_multi_turn import (
+    LIBERO_ROTATION_TOLERANCE_RAD,
     LiberoNativeExecutionState,
     LiberoNativeOffsets,
     make_native_move_executor,
@@ -262,12 +263,12 @@ def run_libero_multi_turn_episode(
             and resolved_phase is Phase.DEPLOYMENT
             and deployment_memory_session is not None
         ),
-        "implementation_scope": "reduced_multi_turn_primitive_library",
+        "implementation_scope": "published_libero_primitive_vocabulary",
         "scientific_classification": {
             "paper_confirmed": [
                 "one_primitive_per_turn",
                 "execute_observe_feedback_replan",
-                "vla_act_move_to_release_roles",
+                "seven_primitive_libero_vocabulary_and_roles",
                 "official_task_success_termination",
             ]
             + (["bootstrap_deployment_separation"] if phase_manifest is not None else [])
@@ -282,6 +283,8 @@ def run_libero_multi_turn_episode(
                 "in_process_loop",
                 "rgbd_target_mode_resolution",
                 "configured_offsets_tolerances_budgets",
+                "quaternion_xyzw_pose_and_radian_setpoints",
+                "native_osc_pose_execution",
             ]
             + (
                 ["closed_gripper_transport_without_continuous_grasp_guard"]
@@ -289,11 +292,16 @@ def run_libero_multi_turn_episode(
                 else []
             ),
             "beta_only": (
-                ["visual_pixel_locator", "visual_rgbd_lift_tau"]
+                [
+                    "visual_pixel_locator",
+                    "visual_rgbd_lift_tau",
+                    "guarded_libero_workspace_and_rotation_ranges",
+                ]
                 if visual_locator is not None
                 else [
                     "privileged_instance_segmentation",
                     "privileged_contact_state",
+                    "guarded_libero_workspace_and_rotation_ranges",
                 ]
             ),
         },
@@ -322,6 +330,7 @@ def run_libero_multi_turn_episode(
             "budgets": asdict(budgets),
             "offsets_m": asdict(offsets),
             "position_tolerance_m": tolerance,
+            "rotation_tolerance_rad": LIBERO_ROTATION_TOLERANCE_RAD,
             "camera": camera,
         },
         "git_commit": resolve_git_commit(Path(__file__)),

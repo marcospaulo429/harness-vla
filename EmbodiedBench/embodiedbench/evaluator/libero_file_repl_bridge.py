@@ -35,21 +35,24 @@ class LiberoFileREPLBridge:
         self._executors = {
             "vla_act": vla_executor,
             "move_to": move_executor,
+            "move_pose": move_executor,
+            "rotate_wrist": move_executor,
+            "rotate_pitch": move_executor,
+            "set_gripper": move_executor,
             "release": release_executor,
         }
         self._pending: Dict[str, Any] = {}
         self._results: Dict[int, Any] = {}
         self._repl = LiberoFileREPL(metadata.directory, self._execute_pending)
 
-    @staticmethod
-    def _execution_summary(result: Any) -> Mapping[str, Any]:
+    def _execution_summary(self, result: Any) -> Mapping[str, Any]:
         execution = getattr(result, "execution", result)
         return {
             "primitive_success": bool(execution.primitive_success),
             "task_success": bool(execution.task_success),
             "termination_reason": execution.termination_reason,
             "steps_executed": execution.steps_executed,
-            "holding": getattr(result, "holding", None),
+            "holding": getattr(result, "holding", self._pending.get("holding")),
             "tau_satisfied": getattr(result, "tau_satisfied", None),
         }
 
@@ -76,11 +79,13 @@ class LiberoFileREPLBridge:
         *,
         max_steps: int,
         turn: int,
+        holding=None,
     ):
         self._pending = {
             "turn": turn,
             "observation": observation,
             "max_steps": max_steps,
+            "holding": holding,
         }
         self._repl.step(invocation, turn=turn)
         state = self._repl.process_one()

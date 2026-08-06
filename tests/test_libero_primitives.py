@@ -7,7 +7,9 @@ from embodiedbench.planner.harness.libero_primitives import (
     LiberoPrimitiveError,
     compile_gripper_action,
     compile_move_action,
+    orientation_setpoint,
     pose_postcondition,
+    validate_pose_target,
 )
 
 
@@ -55,6 +57,30 @@ def test_move_pose_clips_large_rotation_delta():
 def test_gripper_commands_match_panda_open_close_convention():
     np.testing.assert_allclose(compile_gripper_action("open"), [0.0] * 6 + [-1.0])
     np.testing.assert_allclose(compile_gripper_action("close"), [0.0] * 6 + [1.0])
+
+
+def test_rotation_setpoints_preserve_other_orientation_components():
+    yaw = orientation_setpoint(_observation(), axis="yaw", angle=math.pi / 2.0)
+    pitch = orientation_setpoint(_observation(), axis="pitch", angle=-math.pi / 4.0)
+
+    np.testing.assert_allclose(
+        yaw, [0.0, 0.0, math.sin(math.pi / 4.0), math.cos(math.pi / 4.0)]
+    )
+    np.testing.assert_allclose(
+        pitch, [0.0, math.sin(-math.pi / 8.0), 0.0, math.cos(math.pi / 8.0)]
+    )
+
+
+def test_move_pose_contract_requires_bounded_xyz_and_unit_quaternion():
+    xyz, pose = validate_pose_target([0.1, -0.2, 1.05], [0.0, 0.0, 0.0, 1.0])
+
+    np.testing.assert_allclose(xyz, [0.1, -0.2, 1.05])
+    np.testing.assert_allclose(pose, [0.0, 0.0, 0.0, 1.0])
+
+    with pytest.raises(LiberoPrimitiveError):
+        validate_pose_target([2.0, 0.0, 0.5], [0.0, 0.0, 0.0, 1.0])
+    with pytest.raises(LiberoPrimitiveError):
+        validate_pose_target([0.0, 0.0, 0.5], [0.0, 0.0, 0.0, 2.0])
 
 
 def test_pose_postcondition_reports_position_and_rotation_separately():

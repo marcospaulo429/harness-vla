@@ -1,14 +1,21 @@
-"""Idempotent file-mediated REPL for synchronous LIBERO adapters."""
+"""Idempotent file-mediated REPL for synchronous and persistent LIBERO workers.
+
+The indexed files, polling lock, hashes, and local lifecycle form a beta,
+paper-compatible protocol. The worker factory, not the protocol, owns live state.
+"""
 
 from __future__ import annotations
 
+import argparse
 import hashlib
+import importlib
 import json
+import os
 from pathlib import Path
+import time
 from typing import Any, Callable, Dict, Optional
 
 from embodiedbench.planner.harness.trace_io import (
-    append_jsonl_record,
     load_complete_jsonl,
     write_json_atomic,
     write_text_atomic,
@@ -16,6 +23,8 @@ from embodiedbench.planner.harness.trace_io import (
 
 
 SCHEMA_VERSION = 1
+SHUTDOWN_NAME = "shutdown.json"
+WORKER_LOCK_NAME = "worker.lock"
 
 
 class LiberoFileProtocolError(RuntimeError):
@@ -41,6 +50,17 @@ def _command_digest(command: Dict[str, Any]) -> str:
         command, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _update_status(path: Path, **updates: Any) -> None:
+    status = {}
+    if path.exists():
+        try:
+            status = _read_json(path)
+        except LiberoFileProtocolError:
+            status = {}
+    status.update(updates)
+    write_json_atomic(path, status)
 
 
 class LiberoFileREPL:
@@ -123,17 +143,13 @@ class LiberoFileREPL:
         ledger = load_complete_jsonl(self.ledger_path)
         if ledger != canonical[:len(ledger)] or len(ledger) > len(canonical):
             raise LiberoFileProtocolError("ledger conflicts with committed states")
-        has_truncated_tail = (
+        if ledger != canonical or (
             self.ledger_path.exists()
             and self.ledger_path.read_bytes()
             and not self.ledger_path.read_bytes().endswith(b"\n")
-        )
-        if has_truncated_tail:
+        ):
             payload = "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in canonical)
             write_text_atomic(self.ledger_path, payload)
-        else:
-            for record in canonical[len(ledger):]:
-                append_jsonl_record(self.ledger_path, record)
         latest = completed[max(completed)]
         status = {
             "schema_version": SCHEMA_VERSION,
@@ -141,8 +157,9 @@ class LiberoFileREPL:
             "done": latest["done"],
             "error": latest["error"],
         }
-        if not self.status_path.exists() or _read_json(self.status_path) != status:
-            write_json_atomic(self.status_path, status)
+        current = _read_json(self.status_path) if self.status_path.exists() else {}
+        if any(current.get(key) != value for key, value in status.items()):
+            _update_status(self.status_path, **status)
 
     def step(self, invocation: Dict[str, Any], *, turn: Optional[int] = None) -> Dict[str, Any]:
         """Atomically publish one command after the preceding state is committed."""
@@ -221,6 +238,149 @@ class LiberoFileREPL:
         """Return all complete advisory ledger records."""
         return load_complete_jsonl(self.ledger_path)
 
+    def request_shutdown(self) -> None:
+        """Atomically request shutdown of a separate persistent worker."""
+        write_json_atomic(
+            self.directory / SHUTDOWN_NAME,
+            {"schema_version": SCHEMA_VERSION, "shutdown": True},
+        )
+
+
+class LiberoFileWorkerProcess:
+    """Beta persistent worker that creates and owns one live executor per episode."""
+
+    def __init__(self, directory, factory: Callable[[], Any], *, poll_interval=0.05):
+        if not callable(factory):
+            raise TypeError("factory must be callable")
+        if poll_interval <= 0:
+            raise ValueError("poll_interval must be positive")
+        self.directory = Path(directory)
+        self.directory.mkdir(parents=True, exist_ok=True)
+        self.factory = factory
+        self.poll_interval = poll_interval
+        self.status_path = self.directory / "status.json"
+        self.lock_path = self.directory / WORKER_LOCK_NAME
+
+    def _acquire_lock(self) -> None:
+        try:
+            descriptor = os.open(self.lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError as exc:
+            raise LiberoFileProtocolError("worker lock already held") from exc
+        with os.fdopen(descriptor, "w", encoding="ascii") as lock_file:
+            lock_file.write(str(os.getpid()) + "\n")
+            lock_file.flush()
+            os.fsync(lock_file.fileno())
+
+    def _shutdown_requested(self) -> bool:
+        path = self.directory / SHUTDOWN_NAME
+        if not path.exists():
+            return False
+        payload = _read_json(path)
+        if payload != {"schema_version": SCHEMA_VERSION, "shutdown": True}:
+            raise LiberoFileProtocolError("invalid shutdown schema")
+        return True
+
+    @staticmethod
+    def _executor(owner: Any) -> Callable[[Any], Any]:
+        executor = owner if callable(owner) else getattr(owner, "execute", None)
+        if not callable(executor):
+            raise TypeError("factory result must be callable or define execute()")
+        return executor
+
+    def run(self) -> None:
+        """Own the executor and process contiguous commands until explicit shutdown."""
+        self._acquire_lock()
+        owner = None
+        failure = None
+        try:
+            owner = self.factory()
+            repl = LiberoFileREPL(self.directory, self._executor(owner))
+            _update_status(
+                self.status_path,
+                schema_version=SCHEMA_VERSION,
+                worker="running",
+                worker_pid=os.getpid(),
+                worker_error=None,
+            )
+            while True:
+                shutdown_requested = self._shutdown_requested()
+                completed_before = len(repl._completed())
+                repl.process_one()
+                completed_after = len(repl._completed())
+                if completed_after == completed_before and shutdown_requested:
+                    break
+                if completed_after == completed_before:
+                    time.sleep(self.poll_interval)
+        except Exception as exc:
+            failure = exc
+            _update_status(
+                self.status_path,
+                schema_version=SCHEMA_VERSION,
+                worker="failed",
+                worker_pid=os.getpid(),
+                worker_error="%s: %s" % (type(exc).__name__, exc),
+            )
+        finally:
+            close = getattr(owner, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception as exc:
+                    if failure is None:
+                        failure = exc
+                        _update_status(
+                            self.status_path,
+                            schema_version=SCHEMA_VERSION,
+                            worker="failed",
+                            worker_pid=os.getpid(),
+                            worker_error="%s: %s" % (type(exc).__name__, exc),
+                        )
+            if failure is None:
+                _update_status(
+                    self.status_path,
+                    schema_version=SCHEMA_VERSION,
+                    worker="stopped",
+                    worker_pid=os.getpid(),
+                    worker_error=None,
+                )
+            try:
+                self.lock_path.unlink()
+            except FileNotFoundError:
+                pass
+        if failure is not None:
+            raise failure
+
+
+def _load_factory(specification: str) -> Callable[[], Any]:
+    module_name, separator, attribute_name = specification.partition(":")
+    if not separator or not module_name or not attribute_name:
+        raise ValueError("factory must use module:attribute syntax")
+    factory = getattr(importlib.import_module(module_name), attribute_name)
+    if not callable(factory):
+        raise TypeError("configured factory must be callable")
+    return factory
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description="Run a persistent LIBERO file REPL worker")
+    parser.add_argument("--directory", required=True)
+    parser.add_argument("--factory", required=True, help="zero-argument module:attribute factory")
+    parser.add_argument("--poll-interval", type=float, default=0.05)
+    arguments = parser.parse_args(argv)
+    try:
+        LiberoFileWorkerProcess(
+            arguments.directory,
+            lambda: _load_factory(arguments.factory)(),
+            poll_interval=arguments.poll_interval,
+        ).run()
+    except Exception:
+        return 1
+    return 0
+
 
 LiberoFilePlanner = LiberoFileREPL
 LiberoFileWorker = LiberoFileREPL
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

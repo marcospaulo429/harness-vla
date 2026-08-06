@@ -1,4 +1,9 @@
 import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
 
 import pytest
 
@@ -6,10 +11,82 @@ from embodiedbench.evaluator.libero_file_repl import (
     LiberoFileProtocolError,
     LiberoFileREPL,
 )
+from embodiedbench.evaluator.libero_file_repl_bridge import (
+    LiberoFileREPLBridge,
+    LiberoProtocolMetadata,
+)
+from embodiedbench.evaluator.libero_analytic_executor import LiberoPrimitiveExecution
+from embodiedbench.evaluator.libero_multi_turn_evaluator import LiberoVLAExecution
 
 
 def _outcome(value, *, done=False):
     return {"state": {"value": value}, "done": done, "error": None}
+
+
+def _wait_for_json(path, predicate=lambda payload: True, timeout=5):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError):
+            time.sleep(0.01)
+            continue
+        if predicate(payload):
+            return payload
+        time.sleep(0.01)
+    raise AssertionError("timed out waiting for %s" % path)
+
+
+def _worker_process(protocol_directory, factory_directory):
+    factory_module = factory_directory / "repl_test_factory.py"
+    factory_module.write_text(
+        """import json
+import os
+
+class StatefulOwner:
+    def __init__(self):
+        self.count = 0
+
+    def execute(self, invocation):
+        self.count += 1
+        return {\"state\": {\"count\": self.count, \"value\": invocation[\"value\"]},
+                \"done\": False, \"error\": None}
+
+    def close(self):
+        with open(os.environ[\"REPL_CLOSE_MARKER\"], \"w\", encoding=\"utf-8\") as marker:
+            json.dump({\"closed\": True, \"count\": self.count}, marker)
+
+def build():
+    return StatefulOwner()
+""",
+        encoding="utf-8",
+    )
+    close_marker = protocol_directory / "owner_closed.json"
+    environment = os.environ.copy()
+    package_root = Path(__file__).parents[1] / "EmbodiedBench"
+    environment["PYTHONPATH"] = os.pathsep.join(
+        (str(factory_directory), str(package_root), environment.get("PYTHONPATH", ""))
+    )
+    environment["REPL_CLOSE_MARKER"] = str(close_marker)
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "embodiedbench.evaluator.libero_file_repl",
+            "--directory",
+            str(protocol_directory),
+            "--factory",
+            "repl_test_factory:build",
+            "--poll-interval",
+            "0.01",
+        ],
+        env=environment,
+    )
+    _wait_for_json(
+        protocol_directory / "status.json",
+        lambda status: status.get("worker") == "running",
+    )
+    return process, close_marker
 
 
 def test_one_command_executes_exactly_once_and_commits_all_files(tmp_path):
@@ -94,15 +171,15 @@ def test_restart_repairs_metadata_after_committed_state_without_reexecution(
     repl.step({"name": "move"})
     import embodiedbench.evaluator.libero_file_repl as module
 
-    original = module.append_jsonl_record
+    original = module.write_text_atomic
 
     def crash_after_state(path, record):
         raise OSError("simulated metadata crash")
 
-    monkeypatch.setattr(module, "append_jsonl_record", crash_after_state)
+    monkeypatch.setattr(module, "write_text_atomic", crash_after_state)
     with pytest.raises(OSError, match="metadata crash"):
         repl.process_one()
-    monkeypatch.setattr(module, "append_jsonl_record", original)
+    monkeypatch.setattr(module, "write_text_atomic", original)
 
     restarted = LiberoFileREPL(tmp_path, lambda invocation: calls.append(invocation))
     state = restarted.process_one()
@@ -133,3 +210,128 @@ def test_files_and_schemas_are_self_contained_and_reconstructable(tmp_path):
     assert log["invocation"] == command["invocation"]
     assert state["done"] is status["done"] is True
     assert repl.ledger()[0]["turn"] == status["last_completed_turn"] == 1
+
+
+def test_subprocess_worker_persists_state_replays_once_and_shuts_down(tmp_path):
+    protocol_directory = tmp_path / "protocol"
+    protocol_directory.mkdir()
+    process, close_marker = _worker_process(protocol_directory, tmp_path)
+    client = LiberoFileREPL(protocol_directory)
+    try:
+        client.step({"value": "first"}, turn=1)
+        first = _wait_for_json(protocol_directory / "state_01.json")
+        assert first["state"] == {"count": 1, "value": "first"}
+
+        assert client.step({"value": "first"}, turn=1) == first
+        client.step({"value": "second"}, turn=2)
+        second = _wait_for_json(protocol_directory / "state_02.json")
+        assert second["state"] == {"count": 2, "value": "second"}
+
+        client.request_shutdown()
+        assert process.wait(timeout=5) == 0
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=5)
+
+    assert json.loads(close_marker.read_text(encoding="utf-8")) == {
+        "closed": True,
+        "count": 2,
+    }
+    status = json.loads((protocol_directory / "status.json").read_text(encoding="utf-8"))
+    assert status["worker"] == "stopped"
+    assert status["last_completed_turn"] == 2
+    assert not (protocol_directory / "worker.lock").exists()
+
+
+@pytest.mark.parametrize("invalid_kind", ["malformed", "gap"])
+def test_subprocess_worker_fails_closed_on_invalid_sequence(
+    tmp_path, invalid_kind
+):
+    protocol_directory = tmp_path / "protocol"
+    protocol_directory.mkdir()
+    process, close_marker = _worker_process(protocol_directory, tmp_path)
+    try:
+        if invalid_kind == "malformed":
+            (protocol_directory / "command_01.json").write_text(
+                '{"turn": 1}', encoding="utf-8"
+            )
+        else:
+            (protocol_directory / "command_02.json").write_text(
+                json.dumps(
+                    {"schema_version": 1, "turn": 2, "invocation": {"value": "late"}}
+                ),
+                encoding="utf-8",
+            )
+        assert process.wait(timeout=5) == 1
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=5)
+
+    status = json.loads((protocol_directory / "status.json").read_text(encoding="utf-8"))
+    assert status["worker"] == "failed"
+    assert invalid_kind in status["worker_error"].lower() or (
+        invalid_kind == "malformed" and "schema" in status["worker_error"].lower()
+    )
+    assert not list(protocol_directory.glob("state_*.json"))
+    assert json.loads(close_marker.read_text(encoding="utf-8"))["count"] == 0
+
+
+def test_bridge_commits_every_published_primitive_and_preserves_holding(tmp_path):
+    calls = []
+
+    def execution(reason="postcondition_met"):
+        return LiberoPrimitiveExecution(
+            observation={"frame": len(calls)},
+            primitive_success=True,
+            task_success=False,
+            termination_reason=reason,
+            steps_executed=1,
+            trace=[],
+        )
+
+    def vla(invocation, observation, *, max_steps):
+        calls.append(invocation["action"])
+        return LiberoVLAExecution(
+            execution("lift_and_grasp_satisfied"), True, "bowl_1"
+        )
+
+    def move(invocation, observation, *, max_steps):
+        calls.append(invocation["action"])
+        return execution()
+
+    def release(invocation, observation, *, max_steps):
+        calls.append(invocation["action"])
+        return execution("release_completed_task_incomplete")
+
+    bridge = LiberoFileREPLBridge(
+        LiberoProtocolMetadata(tmp_path, 17),
+        vla_executor=vla,
+        move_executor=move,
+        release_executor=release,
+    )
+    invocations = [
+        {"action": "vla_act"},
+        {"action": "move_to"},
+        {"action": "move_pose"},
+        {"action": "rotate_wrist"},
+        {"action": "rotate_pitch"},
+        {"action": "set_gripper"},
+        {"action": "release"},
+    ]
+    for turn, invocation in enumerate(invocations, 1):
+        bridge.dispatch(
+            invocation,
+            {"frame": turn},
+            max_steps=1,
+            turn=turn,
+            holding="bowl_1",
+        )
+
+    assert calls == [invocation["action"] for invocation in invocations]
+    for turn in range(1, 8):
+        assert (tmp_path / ("command_%02d.json" % turn)).is_file()
+        assert (tmp_path / ("log_%02d.json" % turn)).is_file()
+        state = json.loads((tmp_path / ("state_%02d.json" % turn)).read_text())
+        assert state["state"]["holding"] == "bowl_1"

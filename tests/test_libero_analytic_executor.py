@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from embodiedbench.evaluator.libero_analytic_executor import (
+    execute_gripper_primitive,
     execute_pose_primitive,
     execute_release_primitive,
 )
@@ -149,6 +150,19 @@ def test_release_reports_official_success_separately():
     assert result.task_success is True
     assert result.termination_reason == "task_success"
     assert result.steps_executed == 1
+
+
+def test_set_gripper_has_its_own_postcondition_and_official_success_field():
+    env = _FakeOscEnv()
+
+    result = execute_gripper_primitive(
+        env, env.observation(), gripper="close", max_steps=2
+    )
+
+    assert result.primitive_success is True
+    assert result.task_success is False
+    assert result.termination_reason == "gripper_set"
+    assert all(action == [0.0] * 6 + [1.0] for action in env.actions)
 
 
 def test_release_env_done_is_not_success():

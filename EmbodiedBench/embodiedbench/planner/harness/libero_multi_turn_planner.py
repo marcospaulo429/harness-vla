@@ -6,6 +6,11 @@ import json
 from typing import Any, Dict, Optional, Sequence, Tuple
 
 from embodiedbench.planner.harness.harness_planner import extract_json_object
+from embodiedbench.planner.harness.libero_primitives import (
+    LiberoPrimitiveError,
+    validate_pose_target,
+    validate_rotation_setpoint,
+)
 from embodiedbench.planner.harness.libero_vla_planner import LiberoVLAPlanner
 
 
@@ -14,9 +19,14 @@ Emit exactly one JSON primitive per turn and no prose.
 The only available primitives are:
 {"action":"vla_act","prompt":"<local contact prompt>","target":"<grounded name>","max_chunks":<integer>,"tau":"lift_and_grasp"}
 {"action":"move_to","target":"<grounded name>","mode":"above|release_pose","gripper":"close"}
+{"action":"move_pose","xyz":[<x>,<y>,<z>],"pose":[<qx>,<qy>,<qz>,<qw>],"gripper":"open|close"}
+{"action":"rotate_wrist","target_yaw":<radians>}
+{"action":"rotate_pitch","target_pitch":<radians>}
+{"action":"set_gripper","gripper":"open|close"}
 {"action":"release"}
-Choose from grounded target names only. Never emit xyz, joint commands, torques,
-numeric tolerances, success claims, or multiple primitives. Primitive success
+Choose grounded names only for target-based calls. Explicit move_pose values must
+come from current visual RGB-D/world-map evidence, never simulator or oracle poses.
+Never emit joint commands, torques, numeric tolerances, success claims, or multiple primitives. Primitive success
 does not imply task success. A successful move_to means that target and mode
 already hold; do not repeat it unless feedback reports a failure or state
 change. If release_pose succeeded while holding an object and task success is
@@ -87,6 +97,42 @@ def parse_libero_multi_turn_invocation(
             "mode": parsed["mode"],
             "gripper": "close",
         }
+
+    if action == "move_pose":
+        if set(parsed) != {"action", "xyz", "pose", "gripper"}:
+            return None
+        if parsed.get("gripper") not in ("open", "close"):
+            return None
+        try:
+            xyz, pose = validate_pose_target(parsed.get("xyz"), parsed.get("pose"))
+        except (LiberoPrimitiveError, TypeError):
+            return None
+        return {
+            "action": "move_pose",
+            "xyz": xyz.tolist(),
+            "pose": pose.tolist(),
+            "gripper": parsed["gripper"],
+        }
+
+    rotation_fields = {
+        "rotate_wrist": ("target_yaw", "yaw"),
+        "rotate_pitch": ("target_pitch", "pitch"),
+    }
+    if action in rotation_fields:
+        field, axis = rotation_fields[action]
+        if set(parsed) != {"action", field}:
+            return None
+        try:
+            angle = validate_rotation_setpoint(axis, parsed.get(field))
+        except LiberoPrimitiveError:
+            return None
+        return {"action": action, field: angle}
+
+    if action == "set_gripper":
+        if set(parsed) != {"action", "gripper"}:
+            return None
+        gripper = parsed.get("gripper")
+        return parsed if gripper in ("open", "close") else None
 
     if action == "release":
         return {"action": "release"} if set(parsed) == {"action"} else None

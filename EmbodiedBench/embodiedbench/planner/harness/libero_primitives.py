@@ -18,6 +18,10 @@ LIBERO_POSITION_SCALE = np.asarray([0.05, 0.05, 0.05], dtype=float)
 LIBERO_ROTATION_SCALE = np.asarray([0.5, 0.5, 0.5], dtype=float)
 LIBERO_GRIPPER_OPEN = -1.0
 LIBERO_GRIPPER_CLOSED = 1.0
+# Local safety guards; the paper specifies world-frame goals but not ranges.
+LIBERO_XYZ_BOUNDS = ((-1.5, 1.5), (-1.5, 1.5), (0.0, 2.0))
+LIBERO_YAW_BOUNDS = (-math.pi, math.pi)
+LIBERO_PITCH_BOUNDS = (-math.pi / 2.0, math.pi / 2.0)
 
 
 class LiberoPrimitiveError(ValueError):
@@ -25,7 +29,12 @@ class LiberoPrimitiveError(ValueError):
 
 
 def _finite_vector(value: Sequence[float], size: int, name: str) -> np.ndarray:
-    vector = np.asarray(value, dtype=float)
+    try:
+        vector = np.asarray(value, dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise LiberoPrimitiveError(
+            "%s must contain %d finite values" % (name, size)
+        ) from exc
     if vector.shape != (size,) or not np.all(np.isfinite(vector)):
         raise LiberoPrimitiveError("%s must contain %d finite values" % (name, size))
     return vector
@@ -65,6 +74,71 @@ def _quaternion_to_axis_angle(quaternion: np.ndarray) -> np.ndarray:
     if angle > math.pi:
         angle -= 2.0 * math.pi
     return quaternion[:3] * (angle / sine_half_angle)
+
+
+def _quaternion_to_euler(quaternion: np.ndarray) -> tuple[float, float, float]:
+    x, y, z, w = _normalized_quaternion(quaternion, "quaternion")
+    roll = math.atan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y))
+    pitch = math.asin(float(np.clip(2.0 * (w * y - z * x), -1.0, 1.0)))
+    yaw = math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+    return roll, pitch, yaw
+
+
+def _euler_to_quaternion(roll: float, pitch: float, yaw: float) -> np.ndarray:
+    cr, sr = math.cos(roll / 2.0), math.sin(roll / 2.0)
+    cp, sp = math.cos(pitch / 2.0), math.sin(pitch / 2.0)
+    cy, sy = math.cos(yaw / 2.0), math.sin(yaw / 2.0)
+    return _normalized_quaternion(
+        [
+            sr * cp * cy - cr * sp * sy,
+            cr * sp * cy + sr * cp * sy,
+            cr * cp * sy - sr * sp * cy,
+            cr * cp * cy + sr * sp * sy,
+        ],
+        "set-point quaternion",
+    )
+
+
+def validate_pose_target(
+    xyz: Sequence[float], pose: Sequence[float]
+) -> tuple[np.ndarray, np.ndarray]:
+    """Validate the local bounded world-frame quaternion pose contract."""
+    target_xyz = _finite_vector(xyz, 3, "xyz")
+    for value, bounds in zip(target_xyz, LIBERO_XYZ_BOUNDS):
+        if not bounds[0] <= value <= bounds[1]:
+            raise LiberoPrimitiveError("xyz is outside the guarded LIBERO workspace")
+    quaternion = _finite_vector(pose, 4, "pose")
+    if not math.isclose(float(np.linalg.norm(quaternion)), 1.0, abs_tol=1e-3):
+        raise LiberoPrimitiveError("pose must be a unit quaternion [x, y, z, w]")
+    return target_xyz, _normalized_quaternion(quaternion, "pose")
+
+
+def validate_rotation_setpoint(axis: str, angle: float) -> float:
+    """Validate a bounded absolute yaw or pitch set-point in radians."""
+    if axis not in ("yaw", "pitch"):
+        raise LiberoPrimitiveError("rotation axis must be yaw or pitch")
+    if isinstance(angle, bool) or not isinstance(angle, (int, float)):
+        raise LiberoPrimitiveError("rotation set-point must be a finite number")
+    angle = float(angle)
+    bounds = LIBERO_YAW_BOUNDS if axis == "yaw" else LIBERO_PITCH_BOUNDS
+    if not math.isfinite(angle) or not bounds[0] <= angle <= bounds[1]:
+        raise LiberoPrimitiveError("rotation set-point is outside guarded bounds")
+    return angle
+
+
+def orientation_setpoint(
+    observation: Dict[str, Any], *, axis: str, angle: float
+) -> np.ndarray:
+    """Replace one world-frame Euler component while preserving the others."""
+    angle = validate_rotation_setpoint(axis, angle)
+    roll, pitch, yaw = _quaternion_to_euler(
+        LiberoPoseState.from_observation(observation).quaternion
+    )
+    if axis == "yaw":
+        yaw = angle
+    else:
+        pitch = angle
+    return _euler_to_quaternion(roll, pitch, yaw)
 
 
 def _gripper_command(value: str) -> float:
@@ -171,10 +245,16 @@ __all__ = [
     "LIBERO_GRIPPER_CLOSED",
     "LIBERO_GRIPPER_OPEN",
     "LIBERO_POSITION_SCALE",
+    "LIBERO_PITCH_BOUNDS",
     "LIBERO_ROTATION_SCALE",
+    "LIBERO_XYZ_BOUNDS",
+    "LIBERO_YAW_BOUNDS",
     "LiberoPoseState",
     "LiberoPrimitiveError",
     "compile_gripper_action",
     "compile_move_action",
+    "orientation_setpoint",
     "pose_postcondition",
+    "validate_pose_target",
+    "validate_rotation_setpoint",
 ]

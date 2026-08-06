@@ -10,6 +10,7 @@ import numpy as np
 
 from embodiedbench.evaluator.libero_analytic_executor import (
     LiberoPrimitiveExecution,
+    execute_gripper_primitive,
     execute_pose_primitive,
     execute_release_primitive,
 )
@@ -18,12 +19,18 @@ from embodiedbench.evaluator.libero_vla_smoke import (
     _NativeLiftAndGraspMonitor,
     prepare_pirlinf_observation,
 )
-from embodiedbench.planner.harness.libero_primitives import LiberoPrimitiveError
+from embodiedbench.planner.harness.libero_primitives import (
+    LiberoPoseState,
+    LiberoPrimitiveError,
+    orientation_setpoint,
+    validate_pose_target,
+)
 from embodiedbench.planner.harness.libero_tau import read_bilateral_contact
 
 
 Grounder = Callable[[Mapping[str, Any], str], Mapping[str, Any]]
 FrameCallback = Callable[[Mapping[str, Any]], None]
+LIBERO_ROTATION_TOLERANCE_RAD = 0.05
 
 
 def _positive_finite(value: float, name: str) -> float:
@@ -171,12 +178,14 @@ def make_native_move_executor(
     *,
     offsets: LiberoNativeOffsets,
     position_tolerance: float,
+    rotation_tolerance: float = LIBERO_ROTATION_TOLERANCE_RAD,
     execution_state: Optional[LiberoNativeExecutionState] = None,
     grasp_monitor=None,
     frame_callback: Optional[FrameCallback] = None,
 ):
     """Build a move adapter that re-grounds immediately before every call."""
     tolerance = _positive_finite(position_tolerance, "position_tolerance")
+    angular_tolerance = _positive_finite(rotation_tolerance, "rotation_tolerance")
     captured_env = _FrameCaptureEnv(env, frame_callback)
 
     def preserve_grasp(current_observation):
@@ -194,24 +203,73 @@ def make_native_move_executor(
         return None if preserved else "grasp_lost"
 
     def execute(invocation, observation, *, max_steps):
-        if invocation.get("gripper") != "close":
-            raise LiberoPrimitiveError("native move requires gripper close")
-        resolved = resolve_target_xyz(
-            observation,
-            invocation["target"],
-            invocation["mode"],
-            grounder=grounder,
-            offsets=offsets,
-        )
+        action = invocation.get("action")
+        if action == "set_gripper":
+            execution = execute_gripper_primitive(
+                captured_env,
+                observation,
+                gripper=invocation["gripper"],
+                max_steps=max_steps,
+            )
+            if (
+                execution.primitive_success
+                and invocation["gripper"] == "open"
+                and execution_state is not None
+            ):
+                execution_state.holding = None
+            return execution
+
+        target_quaternion = None
+        rotation_tolerance_for_call = None
+        if action == "move_to":
+            if invocation.get("gripper") != "close":
+                raise LiberoPrimitiveError("native move requires gripper close")
+            resolved = resolve_target_xyz(
+                observation,
+                invocation["target"],
+                invocation["mode"],
+                grounder=grounder,
+                offsets=offsets,
+            )
+            target_xyz = resolved.xyz
+            gripper = "close"
+        elif action == "move_pose":
+            target_xyz, target_quaternion = validate_pose_target(
+                invocation["xyz"], invocation["pose"]
+            )
+            gripper = invocation["gripper"]
+            rotation_tolerance_for_call = angular_tolerance
+            resolved = None
+        elif action in ("rotate_wrist", "rotate_pitch"):
+            axis = "yaw" if action == "rotate_wrist" else "pitch"
+            field = "target_yaw" if axis == "yaw" else "target_pitch"
+            pose_state = LiberoPoseState.from_observation(observation)
+            target_xyz = pose_state.xyz
+            target_quaternion = orientation_setpoint(
+                observation, axis=axis, angle=invocation[field]
+            )
+            gripper = (
+                "close"
+                if execution_state is not None and execution_state.holding is not None
+                else "open"
+            )
+            rotation_tolerance_for_call = angular_tolerance
+            resolved = None
+        else:
+            raise LiberoPrimitiveError("unsupported native analytic primitive")
         execution = execute_pose_primitive(
             captured_env,
             observation,
-            resolved.xyz,
-            gripper="close",
+            target_xyz,
+            gripper=gripper,
             max_steps=max_steps,
             position_tolerance=tolerance,
+            target_quaternion=target_quaternion,
+            rotation_tolerance=rotation_tolerance_for_call,
             post_step_guard=preserve_grasp,
         )
+        if resolved is None:
+            return execution
         grounding_trace = {
             "event": "target_resolved",
             "target": resolved.target,

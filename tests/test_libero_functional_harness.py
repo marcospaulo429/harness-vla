@@ -259,6 +259,7 @@ def test_bootstrap_deployment_composes_functional_harness(tmp_path):
     assert run_manifest["scientific_classification"]["beta_only"] == [
         "visual_pixel_locator",
         "visual_rgbd_lift_tau",
+        "guarded_libero_workspace_and_rotation_ranges",
     ]
     assert run_manifest["memory_hashes"]["unchanged"] is True
     assert run_manifest["memory_hashes"]["hashes_before"] == session.hashes_before

@@ -96,7 +96,7 @@ class _FakeExecutors:
         )
 
     def move(self, invocation, observation, *, max_steps):
-        self.calls.append(("move_to", invocation, observation, max_steps))
+        self.calls.append((invocation["action"], invocation, observation, max_steps))
         return _execution(len(self.calls))
 
     def release(self, invocation, observation, *, max_steps):
@@ -179,6 +179,72 @@ def test_scripted_planner_flow_reaches_official_task_success(tmp_path):
         executor_call[1] is planner_call["invocation"]
         for executor_call, planner_call in zip(executors.calls, planner.calls)
     )
+
+
+def test_all_seven_published_libero_primitives_dispatch_one_per_turn(tmp_path):
+    script = [
+        {"action": "set_gripper", "gripper": "open"},
+        {
+            "action": "move_pose",
+            "xyz": [0.1, -0.2, 1.05],
+            "pose": [0.0, 0.0, 0.0, 1.0],
+            "gripper": "open",
+        },
+        {"action": "rotate_wrist", "target_yaw": 1.0},
+        {"action": "rotate_pitch", "target_pitch": -0.5},
+        _happy_script()[0],
+        _happy_script()[1],
+        {"action": "release"},
+    ]
+    planner = _ScriptedPlanner(script)
+    executors = _FakeExecutors()
+    evaluator, trace_path = _evaluator(tmp_path, planner, executors)
+
+    result = evaluator.run(
+        "place the bowl",
+        {"frame": 0},
+        available_targets=TARGETS,
+        budgets=_budgets(max_turns=7),
+    )
+
+    expected = [
+        "set_gripper",
+        "move_pose",
+        "rotate_wrist",
+        "rotate_pitch",
+        "vla_act",
+        "move_to",
+        "release",
+    ]
+    assert result.task_success is True
+    assert result.turns_executed == 7
+    assert [call[0] for call in executors.calls] == expected
+    assert [record["primitive"] for record in load_complete_jsonl(trace_path)] == expected
+
+
+@pytest.mark.parametrize(
+    "invocation",
+    [
+        {"action": "move_pose", "xyz": [9, 0, 0.5], "pose": [0, 0, 0, 1], "gripper": "open"},
+        {"action": "rotate_wrist", "target_yaw": 0.0, "extra": True},
+        {"action": "rotate_pitch", "target_pitch": 2.0},
+        {"action": "set_gripper", "gripper": "hold"},
+    ],
+)
+def test_new_analytic_guards_fail_closed_before_dispatch(tmp_path, invocation):
+    planner = _ScriptedPlanner([invocation])
+    executors = _FakeExecutors()
+    evaluator, _ = _evaluator(tmp_path, planner, executors)
+
+    result = evaluator.run(
+        "stage the gripper",
+        {"frame": 0},
+        available_targets=TARGETS,
+        budgets=_budgets(),
+    )
+
+    assert result.termination_reason == "primitive_compile_error"
+    assert executors.calls == []
 
 
 def test_sequence_is_selected_by_planner_without_evaluator_state_machine(tmp_path):

@@ -73,6 +73,45 @@ def execute_release_primitive(
     )
 
 
+def execute_gripper_primitive(
+    env,
+    observation: Dict[str, Any],
+    *,
+    gripper: str,
+    max_steps: int,
+) -> LiberoPrimitiveExecution:
+    """Drive a gripper set-point without claiming the release post-condition."""
+    if isinstance(max_steps, bool) or not isinstance(max_steps, int) or max_steps < 1:
+        raise LiberoPrimitiveError("max_steps must be an integer greater than zero")
+    action = compile_gripper_action(gripper)
+    current = observation
+    trace = []
+    checker = getattr(env, "check_success", None)
+    for step_index in range(max_steps):
+        current, reward, done, info = _unpack_step(env.step(action.tolist()))
+        trace.append(
+            {
+                "step": step_index + 1,
+                "action": action.tolist(),
+                "reward": reward,
+                "env_done": done,
+                "info": info,
+            }
+        )
+        task_success = bool(checker() if callable(checker) else False)
+        if task_success:
+            return LiberoPrimitiveExecution(
+                current, True, True, "task_success", step_index + 1, trace
+            )
+        if done:
+            return LiberoPrimitiveExecution(
+                current, False, False, "env_done", step_index + 1, trace
+            )
+    return LiberoPrimitiveExecution(
+        current, True, False, "gripper_set", max_steps, trace
+    )
+
+
 def execute_pose_primitive(
     env,
     observation: Dict[str, Any],
@@ -151,6 +190,7 @@ def execute_pose_primitive(
 
 __all__ = [
     "LiberoPrimitiveExecution",
+    "execute_gripper_primitive",
     "execute_pose_primitive",
     "execute_release_primitive",
 ]

@@ -13,6 +13,11 @@ from embodiedbench.planner.harness.trace_io import (
     append_jsonl_record,
     initialize_jsonl,
 )
+from embodiedbench.planner.harness.libero_primitives import (
+    LiberoPrimitiveError,
+    validate_pose_target,
+    validate_rotation_setpoint,
+)
 
 
 def _positive_integer(value: int, name: str) -> None:
@@ -257,6 +262,7 @@ class LiberoMultiTurnEvaluator:
                     current_observation,
                     max_steps=step_budget,
                     turn=turn_index,
+                    holding=current_holding,
                 )
                 if action == "vla_act":
                     vla_result = dispatched
@@ -272,7 +278,13 @@ class LiberoMultiTurnEvaluator:
                 execution = vla_result.execution
                 tau_satisfied = bool(vla_result.tau_satisfied)
                 current_holding = vla_result.holding
-            elif action == "move_to":
+            elif action in (
+                "move_to",
+                "move_pose",
+                "rotate_wrist",
+                "rotate_pitch",
+                "set_gripper",
+            ):
                 execution = self.move_executor(
                     invocation, current_observation, max_steps=step_budget
                 )
@@ -288,6 +300,12 @@ class LiberoMultiTurnEvaluator:
             if execution.termination_reason == "grasp_lost":
                 current_holding = None
             if action == "release" and execution.primitive_success:
+                current_holding = None
+            if (
+                action == "set_gripper"
+                and invocation.get("gripper") == "open"
+                and execution.primitive_success
+            ):
                 current_holding = None
 
             recoverable = bool(
@@ -376,7 +394,15 @@ class LiberoMultiTurnEvaluator:
         invocation: Dict[str, object], holding: Optional[str]
     ) -> Optional[str]:
         action = invocation.get("action")
-        if action not in ("vla_act", "move_to", "release"):
+        if action not in (
+            "vla_act",
+            "move_to",
+            "move_pose",
+            "rotate_wrist",
+            "rotate_pitch",
+            "set_gripper",
+            "release",
+        ):
             return "primitive_compile_error"
         if action == "release" and holding is None:
             return "release_without_holding"
@@ -386,6 +412,30 @@ class LiberoMultiTurnEvaluator:
             return "grasp_lost"
         if action == "vla_act" and holding not in (None, invocation.get("target")):
             return "holding_incompatible"
+        try:
+            if action == "move_pose":
+                if set(invocation) != {"action", "xyz", "pose", "gripper"}:
+                    return "primitive_compile_error"
+                validate_pose_target(invocation.get("xyz"), invocation.get("pose"))
+                if invocation.get("gripper") not in ("open", "close"):
+                    return "primitive_compile_error"
+                if holding is not None and invocation.get("gripper") != "close":
+                    return "holding_incompatible"
+            elif action == "rotate_wrist":
+                if set(invocation) != {"action", "target_yaw"}:
+                    return "primitive_compile_error"
+                validate_rotation_setpoint("yaw", invocation.get("target_yaw"))
+            elif action == "rotate_pitch":
+                if set(invocation) != {"action", "target_pitch"}:
+                    return "primitive_compile_error"
+                validate_rotation_setpoint("pitch", invocation.get("target_pitch"))
+            elif action == "set_gripper":
+                if set(invocation) != {"action", "gripper"}:
+                    return "primitive_compile_error"
+                if invocation.get("gripper") not in ("open", "close"):
+                    return "primitive_compile_error"
+        except (LiberoPrimitiveError, TypeError):
+            return "primitive_compile_error"
         return None
 
     @staticmethod
@@ -394,7 +444,13 @@ class LiberoMultiTurnEvaluator:
         actions_remaining: int,
         budgets: LiberoMultiTurnBudgets,
     ) -> int:
-        if action == "move_to":
+        if action in (
+            "move_to",
+            "move_pose",
+            "rotate_wrist",
+            "rotate_pitch",
+            "set_gripper",
+        ):
             return min(actions_remaining, budgets.max_move_steps)
         if action == "release":
             return min(actions_remaining, budgets.release_steps)

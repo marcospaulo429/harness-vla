@@ -215,13 +215,22 @@ def test_video_manifest_flags_config_and_trace_have_expected_contract(tmp_path):
     manifest = json.loads((run_root / "run_manifest.json").read_text())
     assert manifest["status"] == "completed"
     assert manifest["harness_complete"] is False
-    assert manifest["implementation_scope"] == "reduced_multi_turn_primitive_library"
+    assert manifest["implementation_scope"] == "published_libero_primitive_vocabulary"
     assert "one_primitive_per_turn" in manifest["scientific_classification"][
         "paper_confirmed"
     ]
     assert "in_process_loop" in manifest["scientific_classification"][
         "paper_compatible"
     ]
+    assert "seven_primitive_libero_vocabulary_and_roles" in manifest[
+        "scientific_classification"
+    ]["paper_confirmed"]
+    assert "quaternion_xyzw_pose_and_radian_setpoints" in manifest[
+        "scientific_classification"
+    ]["paper_compatible"]
+    assert "guarded_libero_workspace_and_rotation_ranges" in manifest[
+        "scientific_classification"
+    ]["beta_only"]
     assert "privileged_contact_state" in manifest["scientific_classification"][
         "beta_only"
     ]
@@ -242,6 +251,7 @@ def test_video_manifest_flags_config_and_trace_have_expected_contract(tmp_path):
         },
         "offsets_m": {"above_m": 0.1, "release_pose_m": 0.05},
         "position_tolerance_m": 0.01,
+        "rotation_tolerance_rad": 0.05,
         "camera": "agentview",
     }
     trace_text = (run_root / "trace.jsonl").read_text()

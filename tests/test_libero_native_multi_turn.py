@@ -169,6 +169,37 @@ def test_visual_transport_keeps_gripper_closed_without_privileged_contact_guard(
     assert all(action[6] == 1.0 for action in env.actions)
 
 
+@pytest.mark.parametrize(
+    "invocation",
+    [
+        {
+            "action": "move_pose",
+            "xyz": [0.05, 0.0, 0.5],
+            "pose": [0.0, 0.0, 0.0, 1.0],
+            "gripper": "open",
+        },
+        {"action": "rotate_wrist", "target_yaw": 0.5},
+        {"action": "rotate_pitch", "target_pitch": -0.25},
+        {"action": "set_gripper", "gripper": "close"},
+    ],
+)
+def test_native_adapter_executes_each_added_analytic_primitive(invocation):
+    env = _FakeEnv()
+    grounder_calls = []
+    execute = make_native_move_executor(
+        env,
+        lambda observation, target: grounder_calls.append(target),
+        offsets=LiberoNativeOffsets(above_m=0.1, release_pose_m=0.05),
+        position_tolerance=1e-6,
+    )
+
+    result = execute(invocation, env.current, max_steps=1)
+
+    assert result.steps_executed == 1
+    assert len(env.actions) == 1
+    assert grounder_calls == []
+
+
 @pytest.mark.parametrize("value", [0.0, -0.1, float("inf"), float("nan")])
 def test_offsets_must_be_finite_and_positive(value):
     with pytest.raises(LiberoPrimitiveError):

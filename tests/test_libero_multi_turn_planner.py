@@ -35,6 +35,28 @@ TARGETS = ["akita_black_bowl_1", "plate_1"]
                 "gripper": "close",
             },
         ),
+        (
+            '{"action":"move_pose","xyz":[0.1,-0.2,1.05],'
+            '"pose":[0,0,0,1],"gripper":"open"}',
+            {
+                "action": "move_pose",
+                "xyz": [0.1, -0.2, 1.05],
+                "pose": [0.0, 0.0, 0.0, 1.0],
+                "gripper": "open",
+            },
+        ),
+        (
+            '{"action":"rotate_wrist","target_yaw":1.25}',
+            {"action": "rotate_wrist", "target_yaw": 1.25},
+        ),
+        (
+            '{"action":"rotate_pitch","target_pitch":-0.5}',
+            {"action": "rotate_pitch", "target_pitch": -0.5},
+        ),
+        (
+            '{"action":"set_gripper","gripper":"close"}',
+            {"action": "set_gripper", "gripper": "close"},
+        ),
         ('{"action":"release"}', {"action": "release"}),
     ],
 )
@@ -56,6 +78,12 @@ def test_parser_accepts_published_initial_primitives(raw, expected):
         '{"action":"release","task_success":true}',
         '{"action":"vla_act","prompt":"x","target":"plate_1","max_chunks":5,"tau":"lift_and_grasp"}',
         '{"action":"vla_act","prompt":"x","target":"plate_1","max_chunks":1,"tau":"task_success"}',
+        '{"action":"move_pose","xyz":[2,0,0.5],"pose":[0,0,0,1],"gripper":"open"}',
+        '{"action":"move_pose","xyz":[0,0,0.5],"pose":[0,0,0,2],"gripper":"open"}',
+        '{"action":"rotate_wrist","target_yaw":4}',
+        '{"action":"rotate_pitch","target_pitch":2}',
+        '{"action":"set_gripper","gripper":"hold"}',
+        '{"action":"set_gripper","gripper":"open","extra":true}',
     ],
 )
 def test_parser_rejects_unsafe_or_out_of_contract_invocations(raw):
