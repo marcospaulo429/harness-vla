@@ -75,12 +75,14 @@ class LiberoMultiTurnEvaluator:
         move_executor: PrimitiveExecutor,
         release_executor: PrimitiveExecutor,
         trace_path,
+        file_repl_bridge=None,
     ) -> None:
         self.planner = planner
         self.vla_executor = vla_executor
         self.move_executor = move_executor
         self.release_executor = release_executor
         self.trace_path = Path(trace_path)
+        self.file_repl_bridge = file_repl_bridge
 
     def run(
         self,
@@ -90,6 +92,10 @@ class LiberoMultiTurnEvaluator:
         available_targets: Sequence[str],
         budgets: LiberoMultiTurnBudgets,
         holding: Optional[str] = None,
+        object_labels: Optional[Dict[str, str]] = None,
+        object_roles: Optional[Dict[str, Sequence[str]]] = None,
+        memory_context: Optional[str] = None,
+        protocol_metadata: Optional[Dict[str, Any]] = None,
     ) -> LiberoMultiTurnResult:
         initialize_jsonl(self.trace_path)
         current_observation = observation
@@ -98,6 +104,11 @@ class LiberoMultiTurnEvaluator:
         last_feedback = None
         steps_executed = 0
         primitive_success = False
+        labels = dict(object_labels or {})
+        roles = {
+            target: list(target_roles)
+            for target, target_roles in (object_roles or {}).items()
+        }
 
         for turn_index in range(1, budgets.max_turns + 1):
             actions_remaining = budgets.horizon - steps_executed
@@ -129,6 +140,11 @@ class LiberoMultiTurnEvaluator:
                 state,
                 available_targets=available_targets,
                 max_chunks_cap=min(budgets.max_chunks_cap, actions_remaining),
+                **(
+                    {"memory_context": memory_context}
+                    if memory_context is not None
+                    else {}
+                ),
             )
             planner_thinking = getattr(self.planner, "last_thinking", None)
 
@@ -144,7 +160,14 @@ class LiberoMultiTurnEvaluator:
                     False,
                 )
                 self._record(
-                    turn_index, raw_output, planner_thinking, None, feedback, []
+                    turn_index,
+                    raw_output,
+                    planner_thinking,
+                    None,
+                    feedback,
+                    [],
+                    labels,
+                    roles,
                 )
                 return self._result(
                     current_observation,
@@ -176,6 +199,8 @@ class LiberoMultiTurnEvaluator:
                     invocation,
                     feedback,
                     [],
+                    labels,
+                    roles,
                 )
                 return self._result(
                     current_observation,
@@ -210,6 +235,8 @@ class LiberoMultiTurnEvaluator:
                     invocation,
                     feedback,
                     [],
+                    labels,
+                    roles,
                 )
                 return self._result(
                     current_observation,
@@ -223,7 +250,22 @@ class LiberoMultiTurnEvaluator:
                 )
 
             tau_satisfied = None
-            if action == "vla_act":
+            protocol_turn = None
+            if self.file_repl_bridge is not None:
+                dispatched, protocol_turn = self.file_repl_bridge.dispatch(
+                    invocation,
+                    current_observation,
+                    max_steps=step_budget,
+                    turn=turn_index,
+                )
+                if action == "vla_act":
+                    vla_result = dispatched
+                    execution = vla_result.execution
+                    tau_satisfied = bool(vla_result.tau_satisfied)
+                    current_holding = vla_result.holding
+                else:
+                    execution = dispatched
+            elif action == "vla_act":
                 vla_result = self.vla_executor(
                     invocation, current_observation, max_steps=step_budget
                 )
@@ -275,6 +317,10 @@ class LiberoMultiTurnEvaluator:
                 invocation,
                 feedback,
                 execution.trace,
+                labels,
+                roles,
+                protocol_metadata,
+                protocol_turn,
             )
             primitive_success = execution.primitive_success
             last_action = action
@@ -402,7 +448,12 @@ class LiberoMultiTurnEvaluator:
         invocation,
         feedback: Dict[str, Any],
         primitive_trace,
+        object_labels: Dict[str, str],
+        object_roles: Dict[str, Sequence[str]],
+        protocol_metadata: Optional[Dict[str, Any]] = None,
+        protocol_turn: Optional[Dict[str, Any]] = None,
     ) -> None:
+        primitive = invocation.get("action") if isinstance(invocation, dict) else None
         append_jsonl_record(
             self.trace_path,
             {
@@ -412,6 +463,20 @@ class LiberoMultiTurnEvaluator:
                 "invocation": invocation,
                 "feedback": feedback,
                 "primitive_trace": primitive_trace,
+                "primitive": primitive,
+                "primitive_postcondition_met": feedback["primitive_success"],
+                "is_contact": primitive == "vla_act",
+                "status": feedback["termination_reason"],
+                "termination_reason": feedback["termination_reason"],
+                "task_success": feedback["task_success"],
+                "episode_status": "completed",
+                "object_labels": object_labels,
+                "object_roles": object_roles,
+                "step_results": primitive_trace,
+                "protocol": {
+                    "metadata": dict(protocol_metadata or {}),
+                    "turn": protocol_turn,
+                },
             },
         )
 

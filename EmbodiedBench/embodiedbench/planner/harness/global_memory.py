@@ -127,9 +127,10 @@ class GlobalMemory:
             if decision.status != "promoted":
                 continue
             candidate = decision.candidate
-            normalized = _normalize_content(candidate.text)
+            rendered_candidate = decision.semantic_interpretation
+            normalized = _normalize_content(rendered_candidate)
             if normalized not in canonical:
-                canonical[normalized] = candidate.text.strip()
+                canonical[normalized] = rendered_candidate.strip()
                 content[candidate.kind].append(canonical[normalized])
             rendered_text = canonical[normalized]
             memory.provenance.setdefault(rendered_text, []).append(
@@ -247,12 +248,21 @@ class GlobalMemoryDecision:
     candidate: GlobalMemoryEvidence
     status: str
     reason: str
+    semantic_interpretation: str = ""
 
     def __post_init__(self) -> None:
         if self.status not in {"pending", "promoted", "rejected"}:
             raise ValueError("decision status must be pending, promoted, or rejected")
         if not self.reason.strip():
             raise ValueError("decision reason must be non-empty")
+        if self.status == "promoted" and not self.semantic_interpretation.strip():
+            raise ValueError(
+                "promoted decision requires a non-empty semantic interpretation"
+            )
+        if self.status != "promoted" and self.semantic_interpretation:
+            raise ValueError(
+                "only promoted decisions may contain a semantic interpretation"
+            )
 
     @property
     def kind(self) -> str:
@@ -263,6 +273,7 @@ class GlobalMemoryDecision:
             "candidate": self.candidate.to_dict(),
             "status": self.status,
             "reason": self.reason,
+            "semantic_interpretation": self.semantic_interpretation,
         }
 
 
@@ -279,7 +290,9 @@ def _candidate_from_dict(item: dict) -> GlobalMemoryEvidence:
     )
 
 
-def _decide_candidate(candidate: GlobalMemoryEvidence) -> GlobalMemoryDecision:
+def _decide_candidate(
+    candidate: GlobalMemoryEvidence, semantic_interpretation: str = ""
+) -> GlobalMemoryDecision:
     if not candidate.trace_path or not candidate.primitive or not candidate.structured_evidence:
         return GlobalMemoryDecision(candidate, "rejected", "incomplete provenance")
     if candidate.primitive not in PRIMITIVE_NAMES:
@@ -297,6 +310,13 @@ def _decide_candidate(candidate: GlobalMemoryEvidence) -> GlobalMemoryDecision:
     )
     if candidate.kind != expected_kind:
         return GlobalMemoryDecision(candidate, "rejected", "outcome/category mismatch")
+    if semantic_interpretation.strip():
+        return GlobalMemoryDecision(
+            candidate,
+            "promoted",
+            "explicit semantically validated interpretation",
+            semantic_interpretation.strip(),
+        )
     return GlobalMemoryDecision(
         candidate,
         "pending",
@@ -354,16 +374,25 @@ class GlobalMemoryLedger:
             return cls(read_only=read_only)
         data = json.loads(ledger_path.read_text(encoding="utf-8"))
         schema_version = data.get("schema_version", 1)
-        if type(schema_version) is not int or schema_version not in {1, 2}:
+        if type(schema_version) is not int or schema_version not in {1, 2, 3}:
             raise ValueError("unsupported Global Memory ledger schema version")
-        if schema_version == 2:
+        if schema_version in {2, 3}:
             decisions = []
             for item in data.get("entries", []):
                 candidate = _candidate_from_dict(item["candidate"])
                 _validate_candidate_provenance(candidate)
-                decision = _decide_candidate(candidate)
-                if (item.get("status"), item.get("reason")) != (
-                    decision.status, decision.reason
+                interpretation = item.get("semantic_interpretation", "")
+                if not isinstance(interpretation, str):
+                    raise ValueError("semantic interpretation must be a string")
+                decision = _decide_candidate(candidate, interpretation)
+                if (
+                    item.get("status"),
+                    item.get("reason"),
+                    interpretation,
+                ) != (
+                    decision.status,
+                    decision.reason,
+                    decision.semantic_interpretation,
                 ):
                     raise ValueError(
                         "persisted Global Memory decision violates promotion policy"
@@ -394,6 +423,26 @@ class GlobalMemoryLedger:
             if decision.candidate.identity == candidate.identity:
                 return decision
         raise KeyError(candidate.identity)
+
+    def promote(
+        self, candidate_id: str, *, semantic_interpretation: str
+    ) -> GlobalMemoryDecision:
+        """Explicitly promote one complete candidate using a semantic rule."""
+        if self.read_only:
+            raise PermissionError("deployment Global Memory ledger is read-only")
+        if not isinstance(semantic_interpretation, str) or not semantic_interpretation.strip():
+            raise ValueError("semantic interpretation must be non-empty")
+        for index, decision in enumerate(self.decisions):
+            if decision.candidate.identity != candidate_id:
+                continue
+            promoted = _decide_candidate(decision.candidate, semantic_interpretation)
+            if promoted.status != "promoted":
+                raise ValueError(
+                    "candidate provenance does not permit explicit promotion"
+                )
+            self.decisions[index] = promoted
+            return promoted
+        raise KeyError(candidate_id)
 
     def audit(self) -> dict:
         counts = {
@@ -432,7 +481,7 @@ class GlobalMemoryLedger:
         if self.read_only:
             raise PermissionError("deployment Global Memory ledger is read-only")
         write_json_atomic(path, {
-            "schema_version": 2,
+            "schema_version": 3,
             "entries": [item.to_dict() for item in self.decisions],
         })
 

@@ -151,6 +151,36 @@ def test_global_memory_does_not_render_raw_boolean_candidates(tmp_path):
     assert "release did not satisfy its postcondition" not in rendered
 
 
+def test_explicit_semantic_promotion_persists_and_renders(tmp_path):
+    trace_path = tmp_path / "trace.jsonl"
+    ledger_path = tmp_path / "ledger.json"
+    _write_trace(trace_path, [{
+        "turn": 1,
+        "primitive": "move_to",
+        "termination_reason": "postcondition_met",
+        "primitive_postcondition_met": True,
+    }])
+    ledger = GlobalMemoryLedger()
+    candidate = evidence_from_completed_trace(
+        trace_path, run_status="completed"
+    )[0]
+    ledger.add(candidate)
+
+    with pytest.raises(ValueError, match="non-empty"):
+        ledger.promote(candidate.identity, semantic_interpretation="  ")
+    decision = ledger.promote(
+        candidate.identity,
+        semantic_interpretation="Stage above the destination before transport.",
+    )
+    ledger.save(ledger_path)
+
+    loaded = GlobalMemoryLedger.load(ledger_path)
+    memory = GlobalMemory.from_ledger(ledger_path, include_seed=False)
+    assert loaded.decision_for(candidate).status == "promoted"
+    assert decision.semantic_interpretation in memory.render()
+    assert candidate.text not in memory.render()
+
+
 def test_process_trace_is_byte_for_byte_idempotent(tmp_path):
     trace_path = tmp_path / "trace.jsonl"
     ledger_path = tmp_path / "ledger.json"

@@ -11,6 +11,7 @@ from embodiedbench.evaluator.libero_multi_turn_evaluator import (
     LiberoVLAExecution,
 )
 from embodiedbench.planner.harness.trace_io import load_complete_jsonl
+from embodiedbench.planner.harness.task_memory import build_task_memory
 
 
 TARGETS = ["akita_black_bowl_1", "plate_1"]
@@ -444,25 +445,25 @@ def test_planner_parse_error_is_traced_without_dispatch(tmp_path):
 
     assert result.termination_reason == "planner_parse_error"
     assert executors.calls == []
-    assert load_complete_jsonl(trace_path) == [
-        {
-            "turn": 1,
-            "planner_raw_output": "not json",
-            "planner_thinking": "scripted thinking",
-            "invocation": None,
-            "feedback": {
-                "action": None,
-                "primitive_success": False,
-                "task_success": False,
-                "env_done": False,
-                "termination_reason": "planner_parse_error",
-                "steps_executed": 0,
-                "holding": None,
-                "recoverable": False,
-            },
-            "primitive_trace": [],
-        }
-    ]
+    records = load_complete_jsonl(trace_path)
+    assert len(records) == 1
+    record = records[0]
+    assert record["turn"] == 1
+    assert record["planner_raw_output"] == "not json"
+    assert record["planner_thinking"] == "scripted thinking"
+    assert record["invocation"] is None
+    assert record["primitive"] is None
+    assert record["primitive_trace"] == []
+    assert record["feedback"] == {
+        "action": None,
+        "primitive_success": False,
+        "task_success": False,
+        "env_done": False,
+        "termination_reason": "planner_parse_error",
+        "steps_executed": 0,
+        "holding": None,
+        "recoverable": False,
+    }
 
 
 def test_trace_has_one_reconstructable_record_per_turn(tmp_path):
@@ -475,6 +476,14 @@ def test_trace_has_one_reconstructable_record_per_turn(tmp_path):
         {"frame": 0},
         available_targets=TARGETS,
         budgets=_budgets(),
+        object_labels={
+            "akita_black_bowl_1": "black bowl",
+            "plate_1": "plate",
+        },
+        object_roles={
+            "akita_black_bowl_1": ["manipulable"],
+            "plate_1": ["destination"],
+        },
     )
 
     records = load_complete_jsonl(trace_path)
@@ -497,3 +506,21 @@ def test_trace_has_one_reconstructable_record_per_turn(tmp_path):
     )
     assert records[2]["feedback"]["target"] == "plate_1"
     assert records[2]["feedback"]["mode"] == "release_pose"
+
+    decision = build_task_memory(
+        records,
+        {
+            "task_success": 1.0,
+            "instruction": "place the bowl",
+            "num_turns": 4,
+        },
+    )
+    assert decision.accepted is True
+    assert [command["action"] for command in decision.commands] == [
+        "vla_act",
+        "move_to",
+        "move_to",
+        "release",
+    ]
+    assert decision.commands[0]["target"]["label"] == "black bowl"
+    assert decision.commands[1]["target"]["label"] == "plate"
