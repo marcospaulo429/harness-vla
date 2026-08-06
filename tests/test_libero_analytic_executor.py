@@ -70,6 +70,25 @@ def test_task_success_stops_without_becoming_primitive_success():
     assert result.steps_executed == 1
 
 
+def test_post_step_guard_stops_pose_execution_without_success():
+    env = _FakeOscEnv()
+
+    result = execute_pose_primitive(
+        env,
+        env.observation(),
+        [0.2, 0.0, 0.5],
+        gripper="close",
+        max_steps=5,
+        position_tolerance=1e-6,
+        post_step_guard=lambda observation: "grasp_lost",
+    )
+
+    assert result.primitive_success is False
+    assert result.task_success is False
+    assert result.termination_reason == "grasp_lost"
+    assert result.steps_executed == 1
+
+
 def test_env_done_is_not_reported_as_task_or_primitive_success():
     env = _FakeOscEnv(done_after=1)
 

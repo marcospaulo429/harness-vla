@@ -215,7 +215,7 @@ Razões de término mínimas:
 - [x] Re-grounding antes de cada `move_to`.
 - [x] Resolução `above` e `release_pose` sem pose oracle.
 - [x] Integração do executor OSC existente.
-- [ ] Monitor de grasp durante transporte.
+- [x] Monitor de grasp durante transporte.
 - [x] Vídeo contínuo de todas as fases.
 
 ### Etapa E — Runner e smoke real
@@ -297,7 +297,10 @@ Razões de término mínimas:
   do chunk e atribui `holding` somente quando `lift_and_grasp` é satisfeito.
 - Falhas transitórias de tau falham fechado e permanecem no trace.
 - Teste focado: `11 passed`; conjunto relacionado: `77 passed`.
-- Risco pendente: monitorar preservação bilateral do grasp durante transporte.
+- Um estado nativo compartilhado guarda somente o nome do objeto segurado;
+  contato bilateral é reavaliado após cada passo de transporte e perda encerra
+  a primitiva como `grasp_lost`, sem sucesso local ou oficial.
+- Validação do guard: `33 passed`; suíte completa final: `338 passed`.
 
 ### 2026-08-06 — Etapa E leve: runner e artifacts
 
@@ -334,8 +337,9 @@ Razões de término mínimas:
 | A–C | testes relacionados | `43 passed` |
 | D | `pytest tests/test_libero_native_multi_turn.py -q` | `11 passed` |
 | D relacionado | adapters e módulos relacionados | `77 passed` |
+| D guard de grasp | executor + adapters + runner | `33 passed` |
 | E leve | `pytest tests/test_libero_multi_turn_run.py -q` | `5 passed` |
 | Revisão E | runner + planner | `22 passed` |
-| Suíte completa | `pytest tests -q` | `336 passed` |
+| Suíte completa | `pytest tests -q` | `338 passed` |
 | Diff | `git diff --check` | passou |
 | Preflight GPU/Ollama/disco/processos | comandos locais | passou |

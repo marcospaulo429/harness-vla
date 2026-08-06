@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from embodiedbench.planner.harness.libero_primitives import (
     LiberoPrimitiveError,
@@ -83,6 +83,7 @@ def execute_pose_primitive(
     position_tolerance: float,
     target_quaternion: Optional[Sequence[float]] = None,
     rotation_tolerance: Optional[float] = None,
+    post_step_guard: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None,
 ) -> LiberoPrimitiveExecution:
     """Recompile and execute OSC deltas until a physical stop condition fires."""
     if isinstance(max_steps, bool) or not isinstance(max_steps, int) or max_steps < 1:
@@ -129,11 +130,21 @@ def execute_pose_primitive(
                 "info": info,
             }
         )
+        task_success = bool(checker() if callable(checker) else False)
+        if task_success:
+            return LiberoPrimitiveExecution(
+                current, False, True, "task_success", step_index + 1, trace
+            )
         if done:
-            task_success = bool(checker() if callable(checker) else False)
             return LiberoPrimitiveExecution(
                 current, False, task_success, "env_done", step_index + 1, trace
             )
+        if post_step_guard is not None:
+            guard_reason = post_step_guard(current)
+            if guard_reason is not None:
+                return LiberoPrimitiveExecution(
+                    current, False, False, str(guard_reason), step_index + 1, trace
+                )
 
     raise AssertionError("unreachable")
 

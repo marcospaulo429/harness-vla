@@ -14,6 +14,7 @@ from embodiedbench.evaluator.libero_multi_turn_evaluator import (
     LiberoMultiTurnEvaluator,
 )
 from embodiedbench.evaluator.libero_native_multi_turn import (
+    LiberoNativeExecutionState,
     LiberoNativeOffsets,
     make_native_move_executor,
     make_native_release_executor,
@@ -203,11 +204,13 @@ def run_libero_multi_turn_episode(
             frames.append(_video_frame(observation, camera))
 
         frame_callback = lambda current: frames.append(_video_frame(current, camera))
+        execution_state = LiberoNativeExecutionState()
         active_vla_executor = vla_executor or make_native_vla_executor(
             env,
             backend,
             resize_with_pad=resize_with_pad,
             convert_to_uint8=convert_to_uint8,
+            execution_state=execution_state,
             frame_callback=frame_callback,
         )
         if move_executor is None:
@@ -219,12 +222,13 @@ def run_libero_multi_turn_episode(
                 active_grounder,
                 offsets=offsets,
                 position_tolerance=tolerance,
+                execution_state=execution_state,
                 frame_callback=frame_callback,
             )
         else:
             active_move_executor = move_executor
         active_release_executor = release_executor or make_native_release_executor(
-            env, frame_callback=frame_callback
+            env, execution_state=execution_state, frame_callback=frame_callback
         )
         evaluator = LiberoMultiTurnEvaluator(
             planner,

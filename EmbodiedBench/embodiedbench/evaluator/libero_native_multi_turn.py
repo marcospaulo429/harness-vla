@@ -19,6 +19,7 @@ from embodiedbench.evaluator.libero_vla_smoke import (
     prepare_pirlinf_observation,
 )
 from embodiedbench.planner.harness.libero_primitives import LiberoPrimitiveError
+from embodiedbench.planner.harness.libero_tau import read_bilateral_contact
 
 
 Grounder = Callable[[Mapping[str, Any], str], Mapping[str, Any]]
@@ -69,6 +70,11 @@ class LiberoResolvedTarget:
     mode: str
     xyz: tuple[float, float, float]
     provenance: Dict[str, Any]
+
+
+@dataclass
+class LiberoNativeExecutionState:
+    holding: Optional[str] = None
 
 
 def resolve_target_xyz(
@@ -130,11 +136,25 @@ def make_native_move_executor(
     *,
     offsets: LiberoNativeOffsets,
     position_tolerance: float,
+    execution_state: Optional[LiberoNativeExecutionState] = None,
+    grasp_monitor=None,
     frame_callback: Optional[FrameCallback] = None,
 ):
     """Build a move adapter that re-grounds immediately before every call."""
     tolerance = _positive_finite(position_tolerance, "position_tolerance")
     captured_env = _FrameCaptureEnv(env, frame_callback)
+
+    def preserve_grasp(current_observation):
+        if execution_state is None or execution_state.holding is None:
+            return None
+        if grasp_monitor is None:
+            evidence = read_bilateral_contact(env, execution_state.holding)
+            preserved = bool(evidence["bilateral_contact"])
+        else:
+            preserved = bool(
+                grasp_monitor(env, current_observation, execution_state.holding)
+            )
+        return None if preserved else "grasp_lost"
 
     def execute(invocation, observation, *, max_steps):
         if invocation.get("gripper") != "close":
@@ -153,6 +173,7 @@ def make_native_move_executor(
             gripper="close",
             max_steps=max_steps,
             position_tolerance=tolerance,
+            post_step_guard=preserve_grasp,
         )
         grounding_trace = {
             "event": "target_resolved",
@@ -167,13 +188,21 @@ def make_native_move_executor(
 
 
 def make_native_release_executor(
-    env, *, frame_callback: Optional[FrameCallback] = None
+    env,
+    *,
+    execution_state: Optional[LiberoNativeExecutionState] = None,
+    frame_callback: Optional[FrameCallback] = None,
 ):
     """Build a release adapter using the existing native open primitive."""
     captured_env = _FrameCaptureEnv(env, frame_callback)
 
     def execute(invocation, observation, *, max_steps):
-        return execute_release_primitive(captured_env, observation, max_steps=max_steps)
+        execution = execute_release_primitive(
+            captured_env, observation, max_steps=max_steps
+        )
+        if execution.primitive_success and execution_state is not None:
+            execution_state.holding = None
+        return execution
 
     return execute
 
@@ -184,6 +213,7 @@ def make_native_vla_executor(
     *,
     resize_with_pad: Callable[..., np.ndarray],
     convert_to_uint8: Callable[[np.ndarray], np.ndarray],
+    execution_state: Optional[LiberoNativeExecutionState] = None,
     tau_monitor_factory=None,
     frame_callback: Optional[FrameCallback] = None,
 ):
@@ -288,6 +318,8 @@ def make_native_vla_executor(
             trace=_json_safe(traces),
         )
         holding = invocation["target"] if tau_satisfied else None
+        if tau_satisfied and execution_state is not None:
+            execution_state.holding = holding
         return LiberoVLAExecution(primitive, tau_satisfied, holding)
 
     return execute
@@ -295,6 +327,7 @@ def make_native_vla_executor(
 
 __all__ = [
     "LiberoNativeOffsets",
+    "LiberoNativeExecutionState",
     "LiberoResolvedTarget",
     "make_native_move_executor",
     "make_native_release_executor",

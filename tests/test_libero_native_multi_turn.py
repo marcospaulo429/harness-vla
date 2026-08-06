@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from embodiedbench.evaluator.libero_native_multi_turn import (
+    LiberoNativeExecutionState,
     LiberoNativeOffsets,
     make_native_move_executor,
     make_native_release_executor,
@@ -99,6 +100,42 @@ def test_target_modes_offsets_provenance_and_move_regrounding():
     assert second.trace[0]["target_xyz"] != first.trace[0]["target_xyz"]
     assert env.actions and all(action[6] == 1.0 for action in env.actions)
     assert frames == list(range(1, len(env.actions) + 1))
+
+
+def test_move_stops_when_bilateral_grasp_is_lost():
+    env = _FakeEnv()
+    state = LiberoNativeExecutionState(holding="bowl")
+    checks = []
+
+    def grounder(observation, target):
+        return {"world_xyz": [0.2, 0.0, 0.5], "provenance": {}}
+
+    def grasp_monitor(env, observation, holding):
+        checks.append((observation["step"], holding))
+        return False
+
+    move = make_native_move_executor(
+        env,
+        grounder,
+        offsets=LiberoNativeOffsets(above_m=0.1, release_pose_m=0.05),
+        position_tolerance=1e-6,
+        execution_state=state,
+        grasp_monitor=grasp_monitor,
+    )
+    result = move(
+        {
+            "action": "move_to",
+            "target": "plate",
+            "mode": "above",
+            "gripper": "close",
+        },
+        env.current,
+        max_steps=5,
+    )
+
+    assert result.termination_reason == "grasp_lost"
+    assert result.steps_executed == 1
+    assert checks == [(1, "bowl")]
 
 
 @pytest.mark.parametrize("value", [0.0, -0.1, float("inf"), float("nan")])
