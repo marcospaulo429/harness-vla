@@ -6,6 +6,7 @@ from pathlib import Path
 
 from embodiedbench.evaluator.libero_vla_smoke import run_libero_vla_smoke
 from embodiedbench.evaluator.run_artifacts import create_run_root
+from embodiedbench.planner.harness.libero_vla_planner import LiberoVLAPlanner
 from embodiedbench.planner.harness.pirlinf_backend import PiRLinfWebsocketBackend
 
 
@@ -20,6 +21,11 @@ def parse_args():
     parser.add_argument("--replan-steps", type=int, default=5)
     parser.add_argument("--max-chunks", type=int, default=8)
     parser.add_argument("--horizon", type=int, default=220)
+    parser.add_argument("--planner-model", default="")
+    parser.add_argument(
+        "--planner-base-url", default="http://localhost:11434/v1"
+    )
+    parser.add_argument("--think", action="store_true")
     parser.add_argument(
         "--output-root",
         type=Path,
@@ -64,6 +70,13 @@ def main():
             args.port,
             replan_steps=args.replan_steps,
         )
+        planner = None
+        if args.planner_model:
+            planner = LiberoVLAPlanner(
+                args.planner_model,
+                base_url=args.planner_base_url,
+                think=args.think,
+            )
         result = run_libero_vla_smoke(
             env=env,
             backend=backend,
@@ -79,6 +92,7 @@ def main():
             horizon=args.horizon,
             resize_with_pad=image_tools.resize_with_pad,
             convert_to_uint8=image_tools.convert_to_uint8,
+            planner=planner,
             host=args.host,
             port=args.port,
         )

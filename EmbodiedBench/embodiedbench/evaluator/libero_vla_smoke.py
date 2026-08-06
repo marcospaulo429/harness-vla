@@ -80,6 +80,7 @@ def run_libero_vla_smoke(
     horizon: int,
     resize_with_pad: Callable[..., np.ndarray],
     convert_to_uint8: Callable[[np.ndarray], np.ndarray],
+    planner=None,
     host: str = "127.0.0.1",
     port: int = 8000,
     video_writer: Callable[[Path, Sequence[np.ndarray]], None] = _default_video_writer,
@@ -101,9 +102,19 @@ def run_libero_vla_smoke(
     trace_path = root / "trace.jsonl"
     initialize_jsonl(trace_path)
 
+    run_type = "harness_vla_only_smoke" if planner is not None else "vla_only_smoke"
     manifest = {
-        "run_type": "vla_only_smoke",
+        "run_type": run_type,
         "harness_complete": False,
+        "analytic_primitives_available": False,
+        "task_memory": False,
+        "global_memory": False,
+        "perception": "text_only_task_instruction",
+        "planner_enabled": planner is not None,
+        "planner_model": getattr(planner, "model_name", None),
+        "planner_raw_output": None,
+        "planner_thinking": None,
+        "planner_invocation": None,
         "backend": "pirlinf_websocket",
         "task_suite": task_suite,
         "task_id": task_id,
@@ -116,7 +127,6 @@ def run_libero_vla_smoke(
         "horizon": horizon,
         "git_commit": resolve_git_commit(Path(__file__)),
     }
-    write_json_atomic(root / "run_manifest.json", manifest)
 
     env.reset()
     raw_observation = env.set_init_state(initial_state)
@@ -130,6 +140,25 @@ def run_libero_vla_smoke(
     executed_action_count = 0
     task_success = False
     chunk_traces = []
+    runtime_chunk_limit = min(max_chunks, int(math.ceil(float(horizon) / replan_steps)))
+    effective_prompt = prompt
+    planner_parse_error = False
+    if planner is not None:
+        invocation, raw_output = planner.act(prompt, runtime_chunk_limit)
+        thinking = getattr(planner, "last_thinking", None)
+        manifest.update(
+            {
+                "planner_raw_output": raw_output,
+                "planner_thinking": thinking,
+                "planner_invocation": invocation,
+            }
+        )
+        if invocation is None:
+            planner_parse_error = True
+        else:
+            effective_prompt = invocation["prompt"]
+            runtime_chunk_limit = invocation["max_chunks"]
+    write_json_atomic(root / "run_manifest.json", manifest)
 
     def execute_chunk(chunk):
         nonlocal executed_action_count, live_observation, raw_observation, task_success
@@ -159,7 +188,7 @@ def run_libero_vla_smoke(
                 break
 
         trace = {
-            "prompt": prompt,
+            "prompt": effective_prompt,
             "chunk_index": len(chunk_traces) + 1,
             "inference_duration_s": float(chunk.inference_duration_s),
             "full_chunk_length": int(chunk.full_chunk_length),
@@ -168,19 +197,35 @@ def run_libero_vla_smoke(
             "dones": dones,
             "task_successes": successes,
             "tau_satisfied": task_success,
+            "planner_raw_output": manifest["planner_raw_output"],
+            "planner_thinking": manifest["planner_thinking"],
+            "planner_invocation": manifest["planner_invocation"],
         }
         chunk_traces.append(trace)
         append_jsonl_record(trace_path, trace)
         return live_observation
 
-    runtime_chunk_limit = min(max_chunks, int(math.ceil(float(horizon) / replan_steps)))
-    runtime_result = VLARuntime(backend).run(
-        live_observation,
-        prompt,
-        runtime_chunk_limit,
-        lambda _: task_success,
-        execute_chunk,
-    )
+    runtime_result = None
+    if planner_parse_error:
+        append_jsonl_record(
+            trace_path,
+            {
+                "event": "planner_parse_error",
+                "prompt": prompt,
+                "planner_raw_output": manifest["planner_raw_output"],
+                "planner_thinking": manifest["planner_thinking"],
+                "planner_invocation": None,
+                "tau_satisfied": False,
+            },
+        )
+    else:
+        runtime_result = VLARuntime(backend).run(
+            live_observation,
+            effective_prompt,
+            runtime_chunk_limit,
+            lambda _: task_success,
+            execute_chunk,
+        )
 
     status = "success" if task_success else "failure"
     video_name = "task_%03d_state_%03d_%s.mp4" % (
@@ -192,15 +237,22 @@ def run_libero_vla_smoke(
     video_writer(video_path, video_frames)
 
     episode = {
-        "run_type": "vla_only_smoke",
+        "run_type": run_type,
         "task_suite": task_suite,
         "task_id": task_id,
         "initial_state_index": initial_state_index,
-        "prompt": prompt,
+        "prompt": effective_prompt,
+        "planner_raw_output": manifest["planner_raw_output"],
+        "planner_thinking": manifest["planner_thinking"],
+        "planner_invocation": manifest["planner_invocation"],
         "task_success": task_success,
-        "tau_satisfied": runtime_result.tau_satisfied,
-        "termination_reason": runtime_result.termination_reason,
-        "chunks_executed": runtime_result.chunks_executed,
+        "tau_satisfied": False if runtime_result is None else runtime_result.tau_satisfied,
+        "termination_reason": (
+            "planner_parse_error"
+            if runtime_result is None
+            else runtime_result.termination_reason
+        ),
+        "chunks_executed": 0 if runtime_result is None else runtime_result.chunks_executed,
         "actions_executed": executed_action_count,
         "horizon": horizon,
         "video": str(video_path.relative_to(root)),
@@ -209,8 +261,11 @@ def run_libero_vla_smoke(
         "episodes": 1,
         "successes": int(task_success),
         "task_success_rate": float(task_success),
-        "budget_exhausted": runtime_result.termination_reason == "budget_exhausted",
-        "termination_reason": runtime_result.termination_reason,
+        "budget_exhausted": (
+            runtime_result is not None
+            and runtime_result.termination_reason == "budget_exhausted"
+        ),
+        "termination_reason": episode["termination_reason"],
     }
     write_json_atomic(root / "episode.json", episode)
     write_json_atomic(root / "summary.json", summary)

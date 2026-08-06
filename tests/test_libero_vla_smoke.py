@@ -59,11 +59,27 @@ class _FakeBackend:
     def __init__(self, actions):
         self.actions = tuple(tuple(action) for action in actions)
         self.calls = 0
+        self.prompts = []
 
     def infer_chunk(self, observation, prompt):
         self.calls += 1
+        self.prompts.append(prompt)
         assert observation.mode == "task"
         return PiRLinfChunk(self.actions, len(self.actions), 0.125)
+
+
+class _FakePlanner:
+    model_name = "fake-gemma"
+
+    def __init__(self, invocation, raw_output="raw planner output"):
+        self.invocation = invocation
+        self.raw_output = raw_output
+        self.last_thinking = "planner thinking"
+        self.calls = []
+
+    def act(self, instruction, max_chunks_cap):
+        self.calls.append((instruction, max_chunks_cap))
+        return self.invocation, self.raw_output
 
 
 def _video_writer(path, frames):
@@ -196,3 +212,54 @@ def test_artifacts_are_written_without_images_and_video_name_is_unique(tmp_path)
     manifest = json.loads((run_root / "run_manifest.json").read_text())
     assert manifest["run_type"] == "vla_only_smoke"
     assert manifest["harness_complete"] is False
+    assert manifest["analytic_primitives_available"] is False
+    assert manifest["task_memory"] is False
+    assert manifest["global_memory"] is False
+    assert manifest["perception"] == "text_only_task_instruction"
+
+
+def test_planner_invocation_controls_vla_prompt_and_chunk_cap(tmp_path):
+    env = _FakeEnv()
+    backend = _FakeBackend([[0.1] * 7])
+    invocation = {
+        "action": "vla_act",
+        "prompt": "planner-selected prompt",
+        "max_chunks": 1,
+        "tau": "task_success",
+    }
+    planner = _FakePlanner(invocation)
+
+    run_root, result = _run(tmp_path, env, backend, planner=planner)
+
+    assert planner.calls == [("pick up the black bowl", 2)]
+    assert backend.calls == 1
+    assert backend.prompts == ["planner-selected prompt"]
+    assert result["episode"]["prompt"] == "planner-selected prompt"
+    assert result["episode"]["planner_raw_output"] == "raw planner output"
+    assert result["episode"]["planner_thinking"] == "planner thinking"
+    manifest = json.loads((run_root / "run_manifest.json").read_text())
+    assert manifest["run_type"] == "harness_vla_only_smoke"
+    assert manifest["harness_complete"] is False
+    assert manifest["analytic_primitives_available"] is False
+    assert manifest["task_memory"] is False
+    assert manifest["global_memory"] is False
+    assert manifest["perception"] == "text_only_task_instruction"
+    assert manifest["planner_invocation"] == invocation
+
+
+def test_planner_parse_error_executes_no_policy_actions(tmp_path):
+    env = _FakeEnv()
+    backend = _FakeBackend([[0.1] * 7])
+    planner = _FakePlanner(None, raw_output="not valid JSON")
+
+    run_root, result = _run(tmp_path, env, backend, planner=planner)
+
+    assert env.actions == [LIBERO_DUMMY_ACTION] * 10
+    assert env.policy_steps == 0
+    assert backend.calls == 0
+    assert result["episode"]["termination_reason"] == "planner_parse_error"
+    assert result["episode"]["chunks_executed"] == 0
+    trace = json.loads((run_root / "trace.jsonl").read_text().strip())
+    assert trace["event"] == "planner_parse_error"
+    assert trace["planner_raw_output"] == "not valid JSON"
+    assert trace["planner_thinking"] == "planner thinking"
