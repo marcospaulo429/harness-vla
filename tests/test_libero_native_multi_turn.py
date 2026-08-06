@@ -139,6 +139,36 @@ def test_move_stops_when_bilateral_grasp_is_lost():
     assert checks == [(1, "bowl")]
 
 
+def test_visual_transport_keeps_gripper_closed_without_privileged_contact_guard():
+    env = _FakeEnv()
+    state = LiberoNativeExecutionState(holding="bowl")
+    move = make_native_move_executor(
+        env,
+        lambda observation, target: {
+            "world_xyz": [0.1, 0.0, 0.5],
+            "provenance": {"privileged_segmentation": False},
+        },
+        offsets=LiberoNativeOffsets(above_m=0.1, release_pose_m=0.05),
+        position_tolerance=1e-6,
+        execution_state=state,
+        grasp_monitor=False,
+    )
+
+    result = move(
+        {
+            "action": "move_to",
+            "target": "plate",
+            "mode": "release_pose",
+            "gripper": "close",
+        },
+        env.current,
+        max_steps=5,
+    )
+
+    assert result.termination_reason == "postcondition_met"
+    assert all(action[6] == 1.0 for action in env.actions)
+
+
 @pytest.mark.parametrize("value", [0.0, -0.1, float("inf"), float("nan")])
 def test_offsets_must_be_finite_and_positive(value):
     with pytest.raises(LiberoPrimitiveError):

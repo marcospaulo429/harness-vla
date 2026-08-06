@@ -282,7 +282,12 @@ def run_libero_multi_turn_episode(
                 "in_process_loop",
                 "rgbd_target_mode_resolution",
                 "configured_offsets_tolerances_budgets",
-            ],
+            ]
+            + (
+                ["closed_gripper_transport_without_continuous_grasp_guard"]
+                if visual_locator is not None
+                else []
+            ),
             "beta_only": (
                 ["visual_pixel_locator", "visual_rgbd_lift_tau"]
                 if visual_locator is not None
@@ -387,13 +392,7 @@ def run_libero_multi_turn_episode(
                 offsets=offsets,
                 position_tolerance=tolerance,
                 execution_state=execution_state,
-                grasp_monitor=(
-                    (lambda unused_env, current, holding: bool(
-                        active_grounder(current, holding)
-                    ))
-                    if visual_locator is not None
-                    else None
-                ),
+                grasp_monitor=False if visual_locator is not None else None,
                 frame_callback=frame_callback,
             )
         else:

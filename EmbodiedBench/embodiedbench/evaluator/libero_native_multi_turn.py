@@ -182,6 +182,8 @@ def make_native_move_executor(
     def preserve_grasp(current_observation):
         if execution_state is None or execution_state.holding is None:
             return None
+        if grasp_monitor is False:
+            return None
         if grasp_monitor is None:
             evidence = read_bilateral_contact(env, execution_state.holding)
             preserved = bool(evidence["bilateral_contact"])
