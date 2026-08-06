@@ -208,7 +208,7 @@ Razões de término mínimas:
 - [x] Dispatch de `vla_act`, `move_to` e `release` por injeção de executores.
 - [x] Trace JSONL por turno.
 - [x] Testes de fluxo feliz e falhas recuperáveis.
-- [ ] Manifest, episode e summary finais (Etapa E).
+- [x] Manifest, episode e summary finais (Etapa E; runs `_3` a `_6`).
 
 ### Etapa D — Grounding e execução nativos
 

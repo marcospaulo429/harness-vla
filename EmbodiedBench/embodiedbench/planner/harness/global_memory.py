@@ -2,12 +2,9 @@
 
 Global Memory stores *task-independent* operating knowledge for the fixed
 primitive library: reusable success rules and failure models (e.g. empty grasp,
-false visual success). In the full framework these are distilled from execution
-traces; in this beta they are a **fixed manual seed** (see the paper's Appendix A
-example) and are injected as context into the planner prompt.
-
-Task Specific Memory (few-shot bootstrapping traces) is intentionally *not*
-implemented in the beta — see ``docs/HARNESS_VLA_BETA_REPORT.md``.
+false visual success). Rules can be seeded manually or promoted explicitly from
+trace-backed candidates. Task Specific Memory and the bootstrap/deployment
+lifecycle are implemented separately in ``libero_memory_lifecycle.py``.
 """
 
 from __future__ import annotations

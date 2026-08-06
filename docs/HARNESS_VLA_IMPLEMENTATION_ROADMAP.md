@@ -1,8 +1,9 @@
 # Roadmap de implementação e avaliação do Harness VLA v2
 
 Atualizado em 2026-08-06. Este é o único documento de planejamento futuro do
-repositório. O estado consolidado está em `HARNESS_VLA_BETA_REPORT.md` e os
-resultados históricos em `docs/runs/`.
+repositório. O estado consolidado atual está em
+`HARNESS_VLA_FUNCTIONAL_ARCHITECTURE_REPORT.md`; `HARNESS_VLA_BETA_REPORT.md` e
+`docs/runs/` preservam snapshots históricos.
 
 ## 1. Regras de escopo
 
@@ -22,16 +23,16 @@ trace analisável e commit próprio.
 | Componente | Classe | Estado | Próximo gate |
 |---|---|---|---|
 | Planner, JSON e loop fechado | paper-confirmed | implementado | regressão Etapa E |
-| Biblioteca fixa e guards | paper-confirmed | implementado | vocabulário LIBERO |
+| Biblioteca fixa e guards | paper-confirmed | vocabulário LIBERO completo | rollout físico |
 | Pós-condições físicas | paper-confirmed | parcial avançado | cobertura uniforme |
 | Trace incremental | paper-confirmed/compatible | implementado | manifesto de eval |
 | Runtime `vla_act` por chunks | paper-confirmed | implementado | ampliar predicados `tau` |
 | Backend pi0.5/RLinf | paper-confirmed | smoke nativo validado | Harness LIBERO completo |
-| RGB-D/world map | paper-confirmed | parcial | remover `sim_mask`/oracle |
-| Task Specific Memory | paper-confirmed | runtime fail-closed | lifecycle LIBERO |
-| Bootstrap/deployment | paper-confirmed | guards no evaluator | run LIBERO oficial |
-| Global Memory incremental | paper-confirmed | candidatos auditados | promoção causal |
-| REPL mediado por arquivos | paper-confirmed | ausente | worker fake idempotente |
+| RGB-D/world map | paper-confirmed | caminho visual integrado | ampliar cobertura |
+| Task Specific Memory | paper-confirmed | lifecycle físico validado | ampliar tarefas |
+| Bootstrap/deployment | paper-confirmed | held-out validado | ampliar seeds |
+| Global Memory incremental | paper-confirmed | promoção física validada | ampliar evidência |
+| REPL mediado por arquivos | paper-confirmed | worker persistente testado | rollout físico separado |
 | Protocolos LIBERO/Pro | paper-confirmed | baseline 20 rollouts + smokes | Harness pareado |
 | EB-Navigation | beta-only | 3 episódios, 2/3 | manter separado do P0 |
 
@@ -137,19 +138,13 @@ Aceitação:
 - budget esgotado é continuação possível, não falso sucesso;
 - trace reconstrói integralmente a chamada.
 
-Estado em 2026-08-06: schema planner-facing, cap, trace e early return foram
-validados com pi0.5/RLinf real e Gemma thinking em task 0/state 0. O smoke usou
-somente `tau=task_success`; predicados de grasp/contato ainda faltam. O
-compilador OSC e o executor fechado de pose passaram em testes, e a projeção
-RGB-D foi validada em um smoke isolado com segmentação privilegiada. Esses
-componentes ainda não estão ligados ao planner-facing evaluator.
-
-Atualização: o schema, o monitor RGB-D/contato e o early return para
-`tau=lift_and_grasp` já estão ligados ao evaluator. O papel do predicado é
-paper-confirmed; contato bilateral e lift mínimo de `0,03 m` são detalhes
-paper-compatible e privilegiados. Duas runs VLA reais satisfizeram o predicado
-em `11/20` e `12/20` chunks; o próximo gate é transportar com `move_to` mantendo
-o gripper fechado, executar `release` e consultar o sucesso oficial.
+Estado em 2026-08-06: schema, cap, trace, `tau=lift_and_grasp`, transporte
+`move_to`, `release` e consulta ao sucesso oficial estão ligados ao evaluator e
+foram exercitados em runs pi0.5/RLinf reais com Gemma thinking. O papel do
+predicado é paper-confirmed; a fórmula visual, contato privilegiado histórico e
+lift mínimo de `0,03 m` são beta-only. O lifecycle físico posterior fechou
+bootstrap e deployment held-out com memórias congeladas e sem estado
+privilegiado. O próximo gate é ampliar tarefas e seeds sem alterar mecanismos.
 
 ## 4. Fase II: reprodução funcional no LIBERO
 
@@ -185,6 +180,11 @@ Aceitação:
 - cada comando é consumido exatamente uma vez;
 - estados são monotônicos;
 - crash/restart não duplica ação nem perde turno concluído.
+
+Estado em 2026-08-06: worker long-running separado, lock exclusivo, estado vivo,
+replay, shutdown e falha fechada passaram em subprocesso real. O runner LIBERO
+físico ainda usa a ponte síncrona. Existe uma janela não transacional se o
+processo cair depois da ação física e antes do commit de `state_NN.json`.
 
 ## 5. Fase III: protocolo experimental
 

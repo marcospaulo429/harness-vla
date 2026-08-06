@@ -4,9 +4,10 @@ Atualizado em 2026-08-06. Fonte científica: **Harness VLA: Steering Frozen
 VLAs into Reliable Manipulation Primitives via Memory-Guided Agents**,
 arXiv:2607.08448v2.
 
-Este documento é a fonte de verdade para o estado atual da implementação. Os
-relatórios em `docs/runs/` são registros históricos imutáveis e podem descrever
-estados anteriores do código.
+Este documento preserva o snapshot consolidado da beta anterior ao lifecycle
+LIBERO funcional. O estado atual está em
+`HARNESS_VLA_FUNCTIONAL_ARCHITECTURE_REPORT.md`; os relatórios em `docs/runs/`
+são registros históricos imutáveis.
 
 ## 1. Veredito
 
@@ -144,8 +145,8 @@ escolha de runtime **paper-compatible**, sem alterar os pesos frozen.
 
 ### 4.1 Testes leves
 
-- 285 testes passam após as primitivas analíticas, o smoke RGB-D e o predicado
-  `lift_and_grasp` LIBERO.
+- 285 testes passavam neste snapshot após primitivas analíticas, smoke RGB-D e
+  `lift_and_grasp`; a evolução posterior está no relatório funcional atual.
 - Há testes para primitivas, planner, grounding, traces, pós-condições, Task
   Memory, Global Memory ledger, phase policy e backends VLA.
 
