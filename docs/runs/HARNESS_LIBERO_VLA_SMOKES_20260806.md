@@ -11,6 +11,7 @@
 | Native pi0.5/RLinf, LIBERO-Spatial, attempt 2 | 20/20 (100%) | native frozen-VLA baseline |
 | LIBERO VLA-only runtime smoke | 1/1 | reduced protocol smoke |
 | LIBERO planner-facing `vla_act` smoke | 1/1 | partial Harness smoke |
+| LIBERO RGB-D grounding smoke | 2/2 objects | beta-only privileged-perception smoke |
 
 The two 20-rollout attempts used the same checkpoint, task suite, task/state
 selection, seed and action budget. Their 19/20 and 20/20 scores are both
@@ -30,6 +31,33 @@ retained; this observed variation prevents reporting only the best attempt.
   `evaluation_runs/libero_vla_only_task0_state0_20260806/`
 - Planner-facing smoke:
   `evaluation_runs/libero_harness_vla_only_gemma_think_task0_state0_20260806/`
+- Canonical RGB-D grounding smoke:
+  `evaluation_runs/libero_grounding_task0_state0_20260806_103016/`
+
+## Native LIBERO analytic and RGB-D slice
+
+**Analytic primitives:** paper-confirmed role, with native OSC scaling and
+closed-loop execution details classified as paper-compatible.
+
+**Grounding:** RGB-D projection is paper-compatible. Instance segmentation and
+the isolated smoke are beta-only because the mask is privileged simulator
+metadata rather than learned perception.
+
+The task 0/state 0 smoke used seed 7, the `agentview` camera at 256x256 and ten
+settling actions. It does not execute the planner or evaluate task success.
+
+- objects requested/grounded: 2/2;
+- mean surface-to-body-center diagnostic error: 0.0242 m;
+- maximum diagnostic error: 0.0393 m;
+- planner coordinates: RGB-D projection only;
+- oracle body centers: diagnostics only, in a separate artifact section;
+- video: 10 decoded frames, 256x256, 10 fps;
+- `harness_complete=false`, `task_success=null`.
+
+An earlier run, `libero_grounding_task0_state0_20260806_102750`, produced the
+same 2/2 and error metrics but rendered its audit video with an extra horizontal
+flip. Its summary was extracted here before cleanup; the post-fix run above is
+canonical.
 
 ## EB-Navigation Harness
 

@@ -139,7 +139,10 @@ Aceitação:
 
 Estado em 2026-08-06: schema planner-facing, cap, trace e early return foram
 validados com pi0.5/RLinf real e Gemma thinking em task 0/state 0. O smoke usou
-somente `tau=task_success`; predicados de grasp/contato ainda faltam.
+somente `tau=task_success`; predicados de grasp/contato ainda faltam. O
+compilador OSC e o executor fechado de pose passaram em testes, e a projeção
+RGB-D foi validada em um smoke isolado com segmentação privilegiada. Esses
+componentes ainda não estão ligados ao planner-facing evaluator.
 
 ## 4. Fase II: reprodução funcional no LIBERO
 

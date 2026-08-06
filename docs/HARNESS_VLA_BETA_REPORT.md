@@ -18,8 +18,10 @@ Ela ainda não implementa integralmente o **núcleo experimental** que sustenta 
 contribuição do paper. Task Specific Memory, Global Memory incremental,
 bootstrap/deployment e percepção isolada existem como componentes parciais,
 mas ainda não formam um lifecycle completo em runs reais. O caminho nativo no
-LIBERO já valida o VLA direto e uma invocação planner-facing, porém ainda não
-oferece as primitivas analíticas, RGB-D do planner ou memórias do Harness.
+LIBERO já valida o VLA direto, uma invocação planner-facing, o compilador e o
+executor fechado de pose analítica. Um smoke RGB-D isolado valida a geometria,
+mas ainda usa segmentação privilegiada e não está integrado ao planner. As
+memórias do Harness também não participam desse caminho.
 
 Classificação correta do estado:
 
@@ -142,7 +144,7 @@ escolha de runtime **paper-compatible**, sem alterar os pesos frozen.
 
 ### 4.1 Testes leves
 
-- 240 testes passam após a integração do planner-facing smoke LIBERO.
+- 265 testes passam após as primitivas analíticas e o smoke RGB-D LIBERO.
 - Há testes para primitivas, planner, grounding, traces, pós-condições, Task
   Memory, Global Memory ledger, phase policy e backends VLA.
 
@@ -185,6 +187,14 @@ Os dois smokes têm `harness_complete=false`: validam o backend, o runtime por
 chunks, o predicado oficial e a auditoria, não o Harness completo. Relatório:
 `docs/runs/HARNESS_LIBERO_VLA_SMOKES_20260806.md`.
 
+O slice seguinte adicionou compilação OSC nativa e execução fechada de
+`move_to`/pose com pós-condição física separada de `task_success`. Um smoke
+RGB-D em task 0/state 0 grounded `2/2` instâncias com erro diagnóstico médio de
+`0,0242 m` e máximo de `0,0393 m` entre a superfície observada e o centro do
+corpo no simulador. A máscara de instância é **beta-only**, explicitamente
+privilegiada, e as coordenadas oracle aparecem somente nas métricas. A run não
+mede sucesso de tarefa e mantém `harness_complete=false`.
+
 ### 4.4 pi0.5/RLinf no EB-Manipulation
 
 A integração cross-embodiment produziu o primeiro grasp real verificado da beta.
@@ -205,7 +215,8 @@ Prioridade P0 para uma reprodução funcional:
 3. promover Global Memory a partir de evidência durante bootstrap;
 4. remover coordenadas e máscaras privilegiadas do payload do planner;
 5. ampliar `tau` além de `task_success` para os predicados publicados;
-6. completar o Harness LIBERO com primitivas analíticas e RGB-D/world maps.
+6. integrar as primitivas analíticas e o RGB-D já isolados ao loop do planner;
+7. completar o world map e o Harness LIBERO end-to-end.
 
 Prioridade P1 para fidelidade arquitetural:
 
