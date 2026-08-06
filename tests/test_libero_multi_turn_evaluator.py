@@ -280,6 +280,54 @@ def test_move_to_with_incompatible_holding_is_blocked(tmp_path, invocation):
     assert executors.calls == []
 
 
+def test_physical_grasp_loss_clears_holding_before_replanning(tmp_path):
+    planner = _ScriptedPlanner(
+        [
+            {
+                "action": "move_to",
+                "target": "plate_1",
+                "mode": "release_pose",
+                "gripper": "close",
+            },
+            {
+                "action": "vla_act",
+                "prompt": "recover the bowl",
+                "target": "akita_black_bowl_1",
+                "max_chunks": 1,
+                "tau": "lift_and_grasp",
+            },
+        ]
+    )
+    executors = _FakeExecutors()
+
+    def lost_move(invocation, observation, *, max_steps):
+        executors.calls.append(("move_to", invocation, observation, max_steps))
+        return _execution(
+            1,
+            primitive_success=False,
+            reason="grasp_lost",
+        )
+
+    evaluator = LiberoMultiTurnEvaluator(
+        planner,
+        vla_executor=executors.vla,
+        move_executor=lost_move,
+        release_executor=executors.release,
+        trace_path=tmp_path / "turns.jsonl",
+    )
+
+    evaluator.run(
+        "place the bowl",
+        {"frame": 0},
+        available_targets=TARGETS,
+        budgets=_budgets(max_turns=2),
+        holding="akita_black_bowl_1",
+    )
+
+    assert planner.calls[1]["state"]["holding"] is None
+    assert planner.calls[1]["state"]["last_feedback"]["holding"] is None
+
+
 def test_release_task_incomplete_can_continue_when_budget_remains(tmp_path):
     planner = _ScriptedPlanner(
         [

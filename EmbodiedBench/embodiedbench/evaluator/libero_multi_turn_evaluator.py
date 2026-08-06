@@ -243,6 +243,8 @@ class LiberoMultiTurnEvaluator:
             current_observation = execution.observation
             steps_executed += execution.steps_executed
             env_done = execution.termination_reason == "env_done"
+            if execution.termination_reason == "grasp_lost":
+                current_holding = None
             if action == "release" and execution.primitive_success:
                 current_holding = None
 

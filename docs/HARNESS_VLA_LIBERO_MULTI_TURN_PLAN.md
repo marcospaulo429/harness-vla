@@ -344,6 +344,35 @@ Razões de término mínimas:
 - Thinking passa a ser persistido por turno no trace para auditoria.
 - Testes focados após correção: `33 passed`.
 
+### 2026-08-06 — Smoke válido e três repetições
+
+Configuração congelada: task 0/state 0, seed 7, commit `bfc41e9`, Gemma4:12b
+thinking, pi0.5/RLinf frozen eager, 8 turnos e horizon 220.
+
+| Run | Task success | Turnos | Ações | Término |
+|---|---:|---:|---:|---|
+| `_3` | 1 | 7 | 123 | `task_success` |
+| `_4` | 0 | 7 | 220 | `horizon_exhausted` |
+| `_5` | 1 | 8 | 177 | `task_success` |
+| `_6` | 0 | 5 | 220 | `horizon_exhausted` |
+
+- Repetições `_4–_6`: `1/3` task success; total `_3–_6`: `2/4`.
+- Todos os planners emitiram JSON válido; não houve parse ou compile error.
+- Gemma escolheu `release` explicitamente; o evaluator não impôs sequência.
+- `task_success` apareceu apenas pelo predicado oficial, inclusive após
+  replanejamento e um segundo ciclo pick/transport/release em `_3`.
+- Falha dominante: 5/6 releases localmente completos não satisfizeram o
+  placement oficial; houve uma perda de grasp durante transporte em `_4`.
+- Todos os quatro vídeos decodificam, têm 256x256 e contagem igual a settling +
+  ações + frame inicial: 134, 231, 188 e 231 frames.
+- O paper deixa geometria de placement com o VLA e não especifica compensação
+  analítica objeto–efetuador. Essa heurística foi rejeitada por ser beta-only;
+  offsets não foram ajustados a partir de duas observações de sucesso.
+- Corrigido bug confirmado em `_4`: `grasp_lost` agora limpa `holding` antes do
+  próximo turno. Teste de regressão focado: `12 passed`.
+- Próxima lacuna paper-compatible: feedback visual pós-release sobre relação
+  objeto–destino, sem coordenadas oracle. Não implementada nesta rodada.
+
 ## 12. Registro de validação
 
 | Etapa | Validação | Resultado |
@@ -364,3 +393,7 @@ Razões de término mínimas:
 | Health check PiRLinf eager | inferência sintética | 5 ações 7D finitas |
 | Run `_2` | task 0/state 0 | falha de sequência; `0/1` task success |
 | Correção de feedback | planner/evaluator/runner | `33 passed` |
+| Run `_3` | smoke válido | `1/1` task success |
+| Repetições `_4–_6` | configuração congelada | `1/3` task success |
+| Total `_3–_6` | mesmo task/state/seed | `2/4` task success |
+| Estado após `grasp_lost` | teste evaluator | `12 passed` |
