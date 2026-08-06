@@ -131,7 +131,7 @@ class PiRLinfWebsocketBackend:
             raise PiRLinfBackendError("observation must be a PiRLinfObservation")
         if not isinstance(prompt, str) or not prompt.strip():
             raise PiRLinfBackendError("prompt must be a non-empty instruction")
-        if observation.mode not in {"grasp", "place", "push"}:
+        if observation.mode not in {"grasp", "place", "push", "task"}:
             raise PiRLinfBackendError(f"unsupported PiRLinf mode: {observation.mode!r}")
         try:
             pose = np.asarray(observation.gripper_pose, dtype=float)

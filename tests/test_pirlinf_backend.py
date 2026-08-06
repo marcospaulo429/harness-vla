@@ -23,7 +23,7 @@ class FakeClient:
         return self.response
 
 
-def _observation(*, image=None, pose=None, qpos=None):
+def _observation(*, image=None, pose=None, qpos=None, mode="grasp"):
     rgb = np.full((224, 224, 3), 127, dtype=np.uint8) if image is None else image
     return PiRLinfObservation(
         front_rgb=rgb,
@@ -33,7 +33,7 @@ def _observation(*, image=None, pose=None, qpos=None):
             if pose is None else pose
         ),
         gripper_qpos=[0.03, 0.04] if qpos is None else qpos,
-        mode="grasp",
+        mode=mode,
     )
 
 
@@ -77,6 +77,17 @@ def test_chunk_is_truncated_and_preserves_full_length():
     assert chunk.full_chunk_length == 10
     assert chunk.raw_deltas[0] == tuple(np.arange(7, dtype=float) / 70)
     assert chunk.inference_duration_s >= 0
+
+
+def test_full_task_mode_preserves_the_native_libero_prompt():
+    backend, client = _backend()
+
+    chunk = backend.infer_chunk(
+        _observation(mode="task"), "pick up the bowl and place it on the plate"
+    )
+
+    assert len(chunk.raw_deltas) == 5
+    assert client.elements[0]["prompt"] == "pick up the bowl and place it on the plate"
 
 
 def test_replan_steps_must_be_positive():
