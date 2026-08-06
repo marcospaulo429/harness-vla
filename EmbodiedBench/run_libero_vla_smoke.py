@@ -27,6 +27,11 @@ def parse_args():
     )
     parser.add_argument("--think", action="store_true")
     parser.add_argument(
+        "--planner-tau",
+        choices=("task_success", "lift_and_grasp"),
+        default="task_success",
+    )
+    parser.add_argument(
         "--output-root",
         type=Path,
         default=Path(__file__).resolve().parents[1] / "evaluation_runs",
@@ -40,7 +45,7 @@ def parse_args():
 
 def create_libero_episode(args):
     from libero.libero import benchmark, get_libero_path
-    from libero.libero.envs import OffScreenRenderEnv
+    from libero.libero.envs import SegmentationRenderEnv
     from openpi_client import image_tools
 
     suite_type = benchmark.get_benchmark_dict()[args.task_suite]
@@ -50,10 +55,12 @@ def create_libero_episode(args):
     if not 0 <= args.initial_state_index < len(initial_states):
         raise IndexError("initial-state-index is outside the task's initial states")
     bddl_path = Path(get_libero_path("bddl_files")) / task.problem_folder / task.bddl_file
-    env = OffScreenRenderEnv(
+    env = SegmentationRenderEnv(
         bddl_file_name=bddl_path,
         camera_heights=256,
         camera_widths=256,
+        camera_depths=True,
+        camera_names=["agentview", "robot0_eye_in_hand"],
     )
     env.seed(args.seed)
     return env, task.language, initial_states[args.initial_state_index], image_tools
@@ -76,6 +83,7 @@ def main():
                 args.planner_model,
                 base_url=args.planner_base_url,
                 think=args.think,
+                required_tau=args.planner_tau,
             )
         result = run_libero_vla_smoke(
             env=env,

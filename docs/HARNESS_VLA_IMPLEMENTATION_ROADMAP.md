@@ -144,6 +144,13 @@ compilador OSC e o executor fechado de pose passaram em testes, e a projeção
 RGB-D foi validada em um smoke isolado com segmentação privilegiada. Esses
 componentes ainda não estão ligados ao planner-facing evaluator.
 
+Atualização: o schema, o monitor RGB-D/contato e o early return para
+`tau=lift_and_grasp` já estão ligados ao evaluator. O papel do predicado é
+paper-confirmed; contato bilateral e lift mínimo de `0,03 m` são detalhes
+paper-compatible e privilegiados. Duas runs VLA reais satisfizeram o predicado
+em `11/20` e `12/20` chunks; o próximo gate é transportar com `move_to` mantendo
+o gripper fechado, executar `release` e consultar o sucesso oficial.
+
 ## 4. Fase II: reprodução funcional no LIBERO
 
 ### P0.6 — Harness LIBERO nativo

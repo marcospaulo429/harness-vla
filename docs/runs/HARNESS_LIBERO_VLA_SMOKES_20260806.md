@@ -12,6 +12,7 @@
 | LIBERO VLA-only runtime smoke | 1/1 | reduced protocol smoke |
 | LIBERO planner-facing `vla_act` smoke | 1/1 | partial Harness smoke |
 | LIBERO RGB-D grounding smoke | 2/2 objects | beta-only privileged-perception smoke |
+| LIBERO planner-facing `lift_and_grasp`, repeats | 2/2 tau | partial Harness contact-phase smoke |
 
 The two 20-rollout attempts used the same checkpoint, task suite, task/state
 selection, seed and action budget. Their 19/20 and 20/20 scores are both
@@ -33,6 +34,8 @@ retained; this observed variation prevents reporting only the best attempt.
   `evaluation_runs/libero_harness_vla_only_gemma_think_task0_state0_20260806/`
 - Canonical RGB-D grounding smoke:
   `evaluation_runs/libero_grounding_task0_state0_20260806_103016/`
+- Canonical lift-and-grasp smoke:
+  `evaluation_runs/libero_lift_and_grasp_gemma_think_task0_state0_canonical_20260806_134009/`
 
 ## Native LIBERO analytic and RGB-D slice
 
@@ -58,6 +61,35 @@ An earlier run, `libero_grounding_task0_state0_20260806_102750`, produced the
 same 2/2 and error metrics but rendered its audit video with an extra horizontal
 flip. Its summary was extracted here before cleanup; the post-fix run above is
 canonical.
+
+## Planner-facing lift-and-grasp phase
+
+The paper-confirmed `vla_act` early-return role was exercised with the frozen
+pi0.5/RLinf checkpoint and Gemma4:12b thinking on task 0/state 0, seed 7. The
+implementation uses bilateral robosuite finger-pad contact plus an RGB-D lift
+of at least `0.03 m`; this formula is paper-compatible and benchmark-specific.
+Contact and instance segmentation are privileged beta instrumentation.
+
+| Run | Tau | Task success | Chunks/actions | Final lift |
+|---|---:|---:|---:|---:|
+| eager repeat 1 | 1 | 0 | 11/53 | 0.0367 m |
+| canonical repeat 2 | 1 | 0 | 12/56 | 0.0343 m |
+
+Both runs stopped on bilateral contact plus lift, had zero tau-evaluation
+errors, and did not exhaust the 20-chunk cap. `task_success=false` is expected:
+the local smoke returns control immediately after grasp and does not transport
+or release the bowl. The canonical MP4 is
+`videos/task_000_state_000_tau_success_task_incomplete.mp4`: 57 frames,
+224x224, 10 fps.
+
+The first attempted run,
+`libero_lift_and_grasp_gemma_think_task0_state0_20260806_132720`, executed zero
+policy actions because checkpoint metadata enabled `torch.compile=max-autotune`,
+which fails in Triton on V100 `sm_70`. Its partial artifacts and
+`incomplete.json` are preserved. Both successful repeats used the same frozen
+weights with `TORCH_COMPILE_DISABLE=1` and `TORCHDYNAMO_DISABLE=1`; eager is a
+paper-compatible runtime choice and the policy health check returned finite
+native actions before evaluation.
 
 ## EB-Navigation Harness
 

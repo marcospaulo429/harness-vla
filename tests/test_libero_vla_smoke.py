@@ -77,9 +77,30 @@ class _FakePlanner:
         self.last_thinking = "planner thinking"
         self.calls = []
 
-    def act(self, instruction, max_chunks_cap):
-        self.calls.append((instruction, max_chunks_cap))
+    def act(self, instruction, max_chunks_cap, available_targets=None):
+        self.calls.append((instruction, max_chunks_cap, list(available_targets or ())))
         return self.invocation, self.raw_output
+
+
+class _FakeLiftMonitor:
+    def __init__(self, env, observation, target):
+        self.env = env
+        self.target = target
+
+    def evaluate(self, observation):
+        return {
+            "predicate": "lift_and_grasp",
+            "target_instance": self.target,
+            "tau_satisfied": self.env.policy_steps >= 2,
+            "task_success_evaluated": False,
+        }
+
+
+class _TransientFailureLiftMonitor(_FakeLiftMonitor):
+    def evaluate(self, observation):
+        if self.env.policy_steps == 1:
+            raise ValueError("target temporarily occluded")
+        return super().evaluate(observation)
 
 
 def _video_writer(path, frames):
@@ -231,7 +252,7 @@ def test_planner_invocation_controls_vla_prompt_and_chunk_cap(tmp_path):
 
     run_root, result = _run(tmp_path, env, backend, planner=planner)
 
-    assert planner.calls == [("pick up the black bowl", 2)]
+    assert planner.calls == [("pick up the black bowl", 2, [])]
     assert backend.calls == 1
     assert backend.prompts == ["planner-selected prompt"]
     assert result["episode"]["prompt"] == "planner-selected prompt"
@@ -263,3 +284,70 @@ def test_planner_parse_error_executes_no_policy_actions(tmp_path):
     assert trace["event"] == "planner_parse_error"
     assert trace["planner_raw_output"] == "not valid JSON"
     assert trace["planner_thinking"] == "planner thinking"
+
+
+def test_lift_and_grasp_tau_stops_mid_chunk_without_task_success(tmp_path):
+    env = _FakeEnv()
+    backend = _FakeBackend([[0.1] * 7, [0.2] * 7, [0.3] * 7])
+    invocation = {
+        "action": "vla_act",
+        "prompt": "grasp and lift the bowl",
+        "max_chunks": 2,
+        "tau": "lift_and_grasp",
+        "target": "akita_black_bowl_1",
+    }
+    planner = _FakePlanner(invocation)
+
+    run_root, result = _run(
+        tmp_path,
+        env,
+        backend,
+        planner=planner,
+        lift_tau_factory=_FakeLiftMonitor,
+    )
+
+    assert env.policy_steps == 2
+    assert result["episode"]["task_success"] is False
+    assert result["episode"]["tau_satisfied"] is True
+    assert result["episode"]["termination_reason"] == "tau_satisfied"
+    assert result["summary"]["tau_satisfied"] is True
+    assert result["summary"]["tau_success_rate"] == 1.0
+    assert (
+        run_root / "videos/task_000_state_000_tau_success_task_incomplete.mp4"
+    ).read_bytes() == b"fake mp4"
+    manifest = json.loads((run_root / "run_manifest.json").read_text())
+    assert manifest["tau_monitor_ready"] is True
+    assert manifest["tau_setup_error"] is None
+    trace = json.loads((run_root / "trace.jsonl").read_text().strip())
+    assert trace["tau_satisfied"] is True
+    assert trace["tau_evidence"]["predicate"] == "lift_and_grasp"
+    assert trace["tau_evidence"]["task_success_evaluated"] is False
+
+
+def test_transient_tau_evaluation_error_is_traced_and_recovers(tmp_path):
+    env = _FakeEnv()
+    backend = _FakeBackend([[0.1] * 7, [0.2] * 7, [0.3] * 7])
+    planner = _FakePlanner(
+        {
+            "action": "vla_act",
+            "prompt": "grasp and lift the bowl",
+            "max_chunks": 2,
+            "tau": "lift_and_grasp",
+            "target": "akita_black_bowl_1",
+        }
+    )
+
+    run_root, result = _run(
+        tmp_path,
+        env,
+        backend,
+        planner=planner,
+        lift_tau_factory=_TransientFailureLiftMonitor,
+    )
+
+    assert result["episode"]["tau_satisfied"] is True
+    assert env.policy_steps == 2
+    trace = json.loads((run_root / "trace.jsonl").read_text().strip())
+    assert trace["tau_evaluation_errors"] == [
+        {"action_index": 1, "error": "target temporarily occluded"}
+    ]

@@ -13,10 +13,12 @@ from embodiedbench.planner.harness.harness_planner import extract_json_object
 SYSTEM_PROMPT = """You are the zero-shot planner for a partial LIBERO VLA smoke.
 This smoke offers only one primitive, vla_act. It is not a complete Harness primitive library.
 It does not offer analytic primitives, Task Memory, or Global Memory.
-Emit exactly one planner-facing JSON invocation and no other action:
+For a complete-task smoke, emit exactly:
 {"action":"vla_act","prompt":"<task prompt for the VLA>","max_chunks":<integer>,"tau":"task_success"}
-The max_chunks value must not exceed the cap supplied by the user. The only
-allowed termination predicate is task_success."""
+For a local grasp phase, emit exactly:
+{"action":"vla_act","prompt":"<local grasp prompt>","max_chunks":<integer>,"tau":"lift_and_grasp","target":"<grounded instance name>"}
+The max_chunks value must not exceed the cap supplied by the user. Do not emit
+numeric thresholds; they are benchmark configuration, not planner decisions."""
 
 
 def parse_libero_vla_invocation(
@@ -42,14 +44,21 @@ def parse_libero_vla_invocation(
         or not 1 <= max_chunks <= max_chunks_cap
     ):
         return None
-    if parsed.get("tau") != "task_success":
+    tau = parsed.get("tau")
+    if tau not in ("task_success", "lift_and_grasp"):
         return None
-    return {
+    invocation = {
         "action": "vla_act",
         "prompt": prompt.strip(),
         "max_chunks": max_chunks,
-        "tau": "task_success",
+        "tau": tau,
     }
+    if tau == "lift_and_grasp":
+        target = parsed.get("target")
+        if not isinstance(target, str) or not target.strip():
+            return None
+        invocation["target"] = target.strip()
+    return invocation
 
 
 class LiberoVLAPlanner:
@@ -61,6 +70,7 @@ class LiberoVLAPlanner:
         base_url: str = "http://localhost:11434/v1",
         think: bool = False,
         request_timeout: float = 600.0,
+        required_tau: str = "task_success",
     ) -> None:
         if not isinstance(model_name, str) or not model_name.strip():
             raise ValueError("model_name must be a non-empty string")
@@ -68,6 +78,9 @@ class LiberoVLAPlanner:
         self.base_url = base_url
         self.think = bool(think)
         self.request_timeout = request_timeout
+        if required_tau not in ("task_success", "lift_and_grasp"):
+            raise ValueError("required_tau is not supported")
+        self.required_tau = required_tau
         self.last_thinking: Optional[str] = None
 
     def _endpoint(self) -> str:
@@ -107,19 +120,32 @@ class LiberoVLAPlanner:
         return message.get("content", "")
 
     def act(
-        self, instruction: str, max_chunks_cap: int
+        self, instruction: str, max_chunks_cap: int, available_targets=None
     ) -> Tuple[Optional[Dict[str, object]], str]:
         """Request the single invocation from task text and initial feedback."""
+        targets = [] if available_targets is None else list(available_targets)
         user_prompt = "\n".join(
             [
                 "Official task instruction: %s" % instruction,
                 "Available max_chunks cap: %d" % max_chunks_cap,
+                "Grounded target names: %s" % json.dumps(targets),
+                "Required termination predicate for this phase: %s"
+                % self.required_tau,
                 "Initial feedback: no policy action has been executed.",
                 "Return exactly one JSON invocation.",
             ]
         )
         raw_output = self._chat(user_prompt)
-        return parse_libero_vla_invocation(raw_output, max_chunks_cap), raw_output
+        invocation = parse_libero_vla_invocation(raw_output, max_chunks_cap)
+        if invocation is not None and invocation["tau"] != self.required_tau:
+            invocation = None
+        if (
+            invocation is not None
+            and invocation["tau"] == "lift_and_grasp"
+            and invocation["target"] not in targets
+        ):
+            invocation = None
+        return invocation, raw_output
 
 
 __all__ = ["LiberoVLAPlanner", "SYSTEM_PROMPT", "parse_libero_vla_invocation"]

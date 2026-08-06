@@ -144,7 +144,8 @@ escolha de runtime **paper-compatible**, sem alterar os pesos frozen.
 
 ### 4.1 Testes leves
 
-- 265 testes passam após as primitivas analíticas e o smoke RGB-D LIBERO.
+- 285 testes passam após as primitivas analíticas, o smoke RGB-D e o predicado
+  `lift_and_grasp` LIBERO.
 - Há testes para primitivas, planner, grounding, traces, pós-condições, Task
   Memory, Global Memory ledger, phase policy e backends VLA.
 
@@ -195,6 +196,19 @@ corpo no simulador. A máscara de instância é **beta-only**, explicitamente
 privilegiada, e as coordenadas oracle aparecem somente nas métricas. A run não
 mede sucesso de tarefa e mantém `harness_complete=false`.
 
+O runtime planner-facing também aceita agora o predicado local
+`lift_and_grasp`, papel **paper-confirmed** em §2.3 e Apêndice B. A beta o mede
+como contato bilateral dos finger pads e elevação RGB-D mínima de `0,03 m`;
+essa fórmula e o limiar são **paper-compatible**, não especificados pelo paper.
+Contato e máscaras vêm do simulador e são marcados como privilegiados. Satisfazer
+esse predicado devolve controle ao planner, mas não implica `task_success`.
+
+Duas runs reais com Gemma thinking e o pi0.5/RLinf frozen satisfizeram esse
+predicado: `11` chunks/`53` ações com lift de `0,0367 m`, e `12` chunks/`56`
+ações com lift de `0,0343 m`. Ambas tiveram contato bilateral, zero erros de
+grounding, `task_success=false` e término por `tau_satisfied`, como esperado
+para a fase local. A run canônica preserva MP4 de `57` frames em 224x224.
+
 ### 4.4 pi0.5/RLinf no EB-Manipulation
 
 A integração cross-embodiment produziu o primeiro grasp real verificado da beta.
@@ -214,7 +228,8 @@ Prioridade P0 para uma reprodução funcional:
 2. executar bootstrap e deployment com seeds oficiais no LIBERO;
 3. promover Global Memory a partir de evidência durante bootstrap;
 4. remover coordenadas e máscaras privilegiadas do payload do planner;
-5. ampliar `tau` além de `task_success` para os predicados publicados;
+5. integrar o retorno de `lift_and_grasp` à fase analítica de transporte e
+  ampliar os demais predicados;
 6. integrar as primitivas analíticas e o RGB-D já isolados ao loop do planner;
 7. completar o world map e o Harness LIBERO end-to-end.
 
