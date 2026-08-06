@@ -323,14 +323,17 @@ def make_native_vla_executor(
         traces = []
         steps_executed = 0
         checker = getattr(env, "check_success", None)
-        try:
-            monitor = monitor_factory(env, current, invocation["target"])
-        except (AttributeError, IndexError, KeyError, TypeError, ValueError) as exc:
-            trace = [{"event": "tau_setup_error", "error": str(exc), "tau_satisfied": False}]
-            primitive = LiberoPrimitiveExecution(
-                current, False, False, "tau_setup_error", 0, trace
-            )
-            return LiberoVLAExecution(primitive, False, None)
+        task_success_mode = invocation.get("tau") == "task_success"
+        monitor = None
+        if not task_success_mode:
+            try:
+                monitor = monitor_factory(env, current, invocation["target"])
+            except (AttributeError, IndexError, KeyError, TypeError, ValueError) as exc:
+                trace = [{"event": "tau_setup_error", "error": str(exc), "tau_satisfied": False}]
+                primitive = LiberoPrimitiveExecution(
+                    current, False, False, "tau_setup_error", 0, trace
+                )
+                return LiberoVLAExecution(primitive, False, None)
 
         tau_satisfied = False
         task_success = False
@@ -374,19 +377,28 @@ def make_native_vla_executor(
                 chunk_trace["rewards"].append(float(reward))
                 chunk_trace["dones"].append(bool(env_done))
                 chunk_trace["task_successes"].append(task_success)
-                try:
-                    evidence = _json_safe(monitor.evaluate(current))
-                    tau_satisfied = bool(evidence.get("tau_satisfied", False))
-                except (AttributeError, IndexError, KeyError, TypeError, ValueError) as exc:
-                    error = {"action_index": steps_executed, "error": str(exc)}
-                    chunk_trace["tau_evaluation_errors"].append(error)
+                if task_success_mode:
+                    tau_satisfied = task_success
                     evidence = {
-                        "predicate": "lift_and_grasp",
-                        "tau_satisfied": False,
-                        "evaluation_error": error,
-                        "task_success_evaluated": False,
+                        "predicate": "task_success",
+                        "source": "env.check_success",
+                        "tau_satisfied": task_success,
+                        "task_success_evaluated": True,
                     }
-                    tau_satisfied = False
+                else:
+                    try:
+                        evidence = _json_safe(monitor.evaluate(current))
+                        tau_satisfied = bool(evidence.get("tau_satisfied", False))
+                    except (AttributeError, IndexError, KeyError, TypeError, ValueError) as exc:
+                        error = {"action_index": steps_executed, "error": str(exc)}
+                        chunk_trace["tau_evaluation_errors"].append(error)
+                        evidence = {
+                            "predicate": "lift_and_grasp",
+                            "tau_satisfied": False,
+                            "evaluation_error": error,
+                            "task_success_evaluated": False,
+                        }
+                        tau_satisfied = False
                 chunk_trace["tau_evidence"].append(evidence)
                 if task_success or env_done or tau_satisfied:
                     break
@@ -406,15 +418,22 @@ def make_native_vla_executor(
             reason = "chunk_budget_exhausted"
         primitive = LiberoPrimitiveExecution(
             observation=current,
-            primitive_success=tau_satisfied or task_success,
+            primitive_success=(
+                task_success if task_success_mode else tau_satisfied or task_success
+            ),
             task_success=task_success,
             termination_reason=reason,
             steps_executed=steps_executed,
             trace=_json_safe(traces),
         )
-        holding = invocation["target"] if tau_satisfied else None
-        if tau_satisfied and execution_state is not None:
-            execution_state.holding = holding
+        if task_success_mode:
+            holding = None if task_success else invocation["target"]
+            if execution_state is not None:
+                execution_state.holding = holding
+        else:
+            holding = invocation["target"] if tau_satisfied else None
+            if tau_satisfied and execution_state is not None:
+                execution_state.holding = holding
         return LiberoVLAExecution(primitive, tau_satisfied, holding)
 
     return execute

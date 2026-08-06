@@ -278,7 +278,7 @@ def test_subprocess_worker_fails_closed_on_invalid_sequence(
     assert json.loads(close_marker.read_text(encoding="utf-8"))["count"] == 0
 
 
-def test_bridge_commits_every_published_primitive_and_preserves_holding(tmp_path):
+def test_bridge_commits_primitives_and_persists_analytic_holding_effects(tmp_path):
     calls = []
 
     def execution(reason="postcondition_met"):
@@ -317,7 +317,7 @@ def test_bridge_commits_every_published_primitive_and_preserves_holding(tmp_path
         {"action": "move_pose"},
         {"action": "rotate_wrist"},
         {"action": "rotate_pitch"},
-        {"action": "set_gripper"},
+        {"action": "set_gripper", "gripper": "open"},
         {"action": "release"},
     ]
     for turn, invocation in enumerate(invocations, 1):
@@ -334,4 +334,5 @@ def test_bridge_commits_every_published_primitive_and_preserves_holding(tmp_path
         assert (tmp_path / ("command_%02d.json" % turn)).is_file()
         assert (tmp_path / ("log_%02d.json" % turn)).is_file()
         state = json.loads((tmp_path / ("state_%02d.json" % turn)).read_text())
-        assert state["state"]["holding"] == "bowl_1"
+        expected_holding = None if turn in (6, 7) else "bowl_1"
+        assert state["state"]["holding"] == expected_holding

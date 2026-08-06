@@ -18,6 +18,7 @@ MULTI_TURN_SYSTEM_PROMPT = """You are the planner for a native LIBERO Harness lo
 Emit exactly one JSON primitive per turn and no prose.
 The only available primitives are:
 {"action":"vla_act","prompt":"<local contact prompt>","target":"<grounded name>","max_chunks":<integer>,"tau":"lift_and_grasp"}
+{"action":"vla_act","prompt":"<contact-rich placement prompt naming the grounded destination>","target":"<held grounded name>","max_chunks":<integer>,"tau":"task_success"}
 {"action":"move_to","target":"<grounded name>","mode":"above|release_pose","gripper":"close"}
 {"action":"move_pose","xyz":[<x>,<y>,<z>],"pose":[<qx>,<qy>,<qz>,<qw>],"gripper":"open|close"}
 {"action":"rotate_wrist","target_yaw":<radians>}
@@ -29,11 +30,15 @@ come from current visual RGB-D/world-map evidence, never simulator or oracle pos
 Never emit joint commands, torques, numeric tolerances, success claims, or multiple primitives. Primitive success
 does not imply task success. A successful move_to means that target and mode
 already hold; do not repeat it unless feedback reports a failure or state
-change. If release_pose succeeded while holding an object and task success is
-false, release is the primitive that opens the gripper. Use the latest feedback
-to choose the next action. For a contact attempt, use the available max_chunks
-cap; tau already returns early, so do not issue a one-chunk probe before the
-same contact prompt."""
+change. After release_pose succeeds, use release only for unconstrained
+placement. For tight LIBERO placement while still holding the object, use
+vla_act with tau=task_success and name the grounded destination in its prompt.
+Use the latest feedback to choose the next action. For a contact attempt, use
+the available max_chunks cap; tau already returns early, so do not issue a
+one-chunk probe before the same contact prompt.
+Use tau=task_success only for contact-rich placement while holding exactly the
+target object. The prompt must explicitly name the grounded destination. This
+mode terminates only on the environment's official task-success predicate."""
 
 
 def _valid_cap(value: int, name: str) -> None:
@@ -73,14 +78,15 @@ def parse_libero_multi_turn_invocation(
             or not 1 <= max_chunks <= max_chunks_cap
         ):
             return None
-        if parsed.get("tau") != "lift_and_grasp":
+        tau = parsed.get("tau")
+        if tau not in ("lift_and_grasp", "task_success"):
             return None
         return {
             "action": "vla_act",
             "prompt": prompt.strip(),
             "target": target,
             "max_chunks": max_chunks,
-            "tau": "lift_and_grasp",
+            "tau": tau,
         }
 
     if action == "move_to":

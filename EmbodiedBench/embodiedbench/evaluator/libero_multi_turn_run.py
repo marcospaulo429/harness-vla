@@ -268,6 +268,7 @@ def run_libero_multi_turn_episode(
             and deployment_memory_session is not None
         ),
         "implementation_scope": "published_libero_primitive_vocabulary",
+        "vla_tau_modes": ["lift_and_grasp", "task_success"],
         "scientific_classification": {
             "paper_confirmed": [
                 "one_primitive_per_turn",

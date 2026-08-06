@@ -217,6 +217,7 @@ def test_video_manifest_flags_config_and_trace_have_expected_contract(tmp_path):
     assert manifest["status"] == "completed"
     assert manifest["harness_complete"] is False
     assert manifest["implementation_scope"] == "published_libero_primitive_vocabulary"
+    assert manifest["vla_tau_modes"] == ["lift_and_grasp", "task_success"]
     assert "one_primitive_per_turn" in manifest["scientific_classification"][
         "paper_confirmed"
     ]

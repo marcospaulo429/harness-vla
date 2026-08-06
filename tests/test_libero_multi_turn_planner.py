@@ -26,6 +26,18 @@ TARGETS = ["akita_black_bowl_1", "plate_1"]
             },
         ),
         (
+            '{"action":"vla_act","prompt":"place the bowl into plate_1",'
+            '"target":"akita_black_bowl_1","max_chunks":3,'
+            '"tau":"task_success"}',
+            {
+                "action": "vla_act",
+                "prompt": "place the bowl into plate_1",
+                "target": "akita_black_bowl_1",
+                "max_chunks": 3,
+                "tau": "task_success",
+            },
+        ),
+        (
             '{"action":"move_to","target":"plate_1",'
             '"mode":"above","gripper":"close"}',
             {
@@ -77,7 +89,7 @@ def test_parser_accepts_published_initial_primitives(raw, expected):
         '{"action":"move_to","target":"plate_1","mode":"above","gripper":"close","xyz":[0,0,0]}',
         '{"action":"release","task_success":true}',
         '{"action":"vla_act","prompt":"x","target":"plate_1","max_chunks":5,"tau":"lift_and_grasp"}',
-        '{"action":"vla_act","prompt":"x","target":"plate_1","max_chunks":1,"tau":"task_success"}',
+        '{"action":"vla_act","prompt":"x","target":"plate_1","max_chunks":1,"tau":"unknown"}',
         '{"action":"move_pose","xyz":[2,0,0.5],"pose":[0,0,0,1],"gripper":"open"}',
         '{"action":"move_pose","xyz":[0,0,0.5],"pose":[0,0,0,2],"gripper":"open"}',
         '{"action":"rotate_wrist","target_yaw":4}',
@@ -126,8 +138,12 @@ def test_planner_turn_contains_semantic_state_without_pose_or_oracle():
     assert "oracle" not in planner.seen_prompt.lower()
     assert "exactly one JSON primitive" in MULTI_TURN_SYSTEM_PROMPT
     assert "do not repeat it" in MULTI_TURN_SYSTEM_PROMPT
-    assert "release is the primitive that opens the gripper" in MULTI_TURN_SYSTEM_PROMPT
-    assert "do not issue a one-chunk probe" in MULTI_TURN_SYSTEM_PROMPT
+    assert "use release only for unconstrained" in MULTI_TURN_SYSTEM_PROMPT
+    assert "For tight LIBERO placement" in MULTI_TURN_SYSTEM_PROMPT
+    assert "one-chunk probe" in MULTI_TURN_SYSTEM_PROMPT
+    assert "contact-rich placement" in MULTI_TURN_SYSTEM_PROMPT
+    assert "holding exactly the" in MULTI_TURN_SYSTEM_PROMPT
+    assert "name the grounded destination" in MULTI_TURN_SYSTEM_PROMPT
 
 
 def test_planner_turn_includes_symbolic_memory_context_and_rejects_pose_data():

@@ -429,8 +429,13 @@ class LiberoMultiTurnEvaluator:
             return "grasp_lost"
         if action == "move_to" and invocation.get("gripper") != "close":
             return "grasp_lost"
-        if action == "vla_act" and holding not in (None, invocation.get("target")):
-            return "holding_incompatible"
+        if action == "vla_act":
+            target = invocation.get("target")
+            if invocation.get("tau") == "task_success":
+                if holding != target:
+                    return "holding_incompatible"
+            elif holding not in (None, target):
+                return "holding_incompatible"
         try:
             if action == "move_pose":
                 if set(invocation) != {"action", "xyz", "pose", "gripper"}:

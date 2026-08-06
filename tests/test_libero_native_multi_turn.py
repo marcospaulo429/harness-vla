@@ -281,6 +281,15 @@ def _invocation(max_chunks=3):
     }
 
 
+def _task_success_invocation(max_chunks=3):
+    invocation = _invocation(max_chunks)
+    invocation.update(
+        prompt="place the bowl into plate_1",
+        tau="task_success",
+    )
+    return invocation
+
+
 def test_vla_reinfers_from_refreshed_observation_and_respects_horizon():
     action = [0.0] * 7
     env = _FakeEnv()
@@ -343,6 +352,46 @@ def test_vla_official_stops_are_distinct_from_tau_and_do_not_set_holding(
     assert result.execution.termination_reason == reason
     assert result.execution.task_success is (reason == "task_success")
     assert result.execution.primitive_success is (reason == "task_success")
+
+
+@pytest.mark.parametrize(
+    "env_kwargs,reason,expected_holding",
+    [
+        ({"success_after": 1}, "task_success", None),
+        ({"done_after": 1}, "env_done", "bowl"),
+        ({}, "step_budget_exhausted", "bowl"),
+    ],
+)
+def test_task_success_tau_uses_only_official_success_and_preserves_holding_on_failure(
+    env_kwargs, reason, expected_holding
+):
+    env = _FakeEnv(**env_kwargs)
+    backend = _Backend([[[0.0] * 7] * 2])
+
+    def forbidden_monitor(*args):
+        raise AssertionError("task_success must not instantiate a grasp monitor")
+
+    state = LiberoNativeExecutionState(holding="bowl")
+    executor = make_native_vla_executor(
+        env,
+        backend,
+        resize_with_pad=_resize,
+        convert_to_uint8=_uint8,
+        execution_state=state,
+        tau_monitor_factory=forbidden_monitor,
+    )
+
+    result = executor(_task_success_invocation(max_chunks=1), env.current, max_steps=2)
+
+    expected_success = reason == "task_success"
+    assert result.execution.termination_reason == reason
+    assert result.execution.task_success is expected_success
+    assert result.execution.primitive_success is expected_success
+    assert result.tau_satisfied is expected_success
+    assert result.holding == state.holding == expected_holding
+    evidence = result.execution.trace[0]["tau_evidence"][-1]
+    assert evidence["predicate"] == "task_success"
+    assert evidence["source"] == "env.check_success"
 
 
 def test_tau_errors_fail_closed_remain_in_serializable_trace_and_never_hold():

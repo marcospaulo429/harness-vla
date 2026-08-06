@@ -47,12 +47,22 @@ class LiberoFileREPLBridge:
 
     def _execution_summary(self, result: Any) -> Mapping[str, Any]:
         execution = getattr(result, "execution", result)
+        holding = getattr(result, "holding", self._pending.get("holding"))
+        invocation = self._pending["invocation"]
+        if execution.primitive_success and (
+            invocation["action"] == "release"
+            or (
+                invocation["action"] == "set_gripper"
+                and invocation.get("gripper") == "open"
+            )
+        ):
+            holding = None
         return {
             "primitive_success": bool(execution.primitive_success),
             "task_success": bool(execution.task_success),
             "termination_reason": execution.termination_reason,
             "steps_executed": execution.steps_executed,
-            "holding": getattr(result, "holding", self._pending.get("holding")),
+            "holding": holding,
             "tau_satisfied": getattr(result, "tau_satisfied", None),
         }
 
@@ -83,6 +93,7 @@ class LiberoFileREPLBridge:
     ):
         self._pending = {
             "turn": turn,
+            "invocation": invocation,
             "observation": observation,
             "max_steps": max_steps,
             "holding": holding,

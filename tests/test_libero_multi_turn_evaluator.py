@@ -358,6 +358,31 @@ def test_release_without_holding_is_blocked_without_executor_call(tmp_path):
     assert load_complete_jsonl(trace_path)[0]["feedback"]["steps_executed"] == 0
 
 
+@pytest.mark.parametrize("holding", [None, "plate_1"])
+def test_task_success_vla_requires_holding_target(tmp_path, holding):
+    invocation = {
+        "action": "vla_act",
+        "prompt": "place the bowl into plate_1",
+        "target": "akita_black_bowl_1",
+        "max_chunks": 1,
+        "tau": "task_success",
+    }
+    planner = _ScriptedPlanner([invocation])
+    executors = _FakeExecutors()
+    evaluator, _ = _evaluator(tmp_path, planner, executors)
+
+    result = evaluator.run(
+        "place the bowl",
+        {"frame": 0},
+        available_targets=TARGETS,
+        budgets=_budgets(),
+        holding=holding,
+    )
+
+    assert result.termination_reason == "holding_incompatible"
+    assert executors.calls == []
+
+
 @pytest.mark.parametrize(
     "invocation",
     [
