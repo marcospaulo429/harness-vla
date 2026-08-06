@@ -1,0 +1,444 @@
+import json
+
+import pytest
+
+from embodiedbench.evaluator.libero_analytic_executor import (
+    LiberoPrimitiveExecution,
+)
+from embodiedbench.evaluator.libero_multi_turn_evaluator import (
+    LiberoMultiTurnBudgets,
+    LiberoMultiTurnEvaluator,
+    LiberoVLAExecution,
+)
+from embodiedbench.planner.harness.trace_io import load_complete_jsonl
+
+
+TARGETS = ["akita_black_bowl_1", "plate_1"]
+
+
+def _budgets(**overrides):
+    values = {
+        "max_turns": 6,
+        "horizon": 20,
+        "max_chunks_cap": 4,
+        "max_move_steps": 5,
+        "release_steps": 3,
+    }
+    values.update(overrides)
+    return LiberoMultiTurnBudgets(**values)
+
+
+def _execution(
+    frame,
+    *,
+    primitive_success=True,
+    task_success=False,
+    reason="postcondition_met",
+    steps=1,
+):
+    return LiberoPrimitiveExecution(
+        observation={
+            "frame": frame,
+            "robot0_eef_pos": [float(frame), 0.0, 0.5],
+        },
+        primitive_success=primitive_success,
+        task_success=task_success,
+        termination_reason=reason,
+        steps_executed=steps,
+        trace=[{"frame": frame, "physical_pose": [float(frame), 0.0, 0.5]}],
+    )
+
+
+class _ScriptedPlanner:
+    def __init__(self, invocations):
+        self.invocations = list(invocations)
+        self.calls = []
+
+    def act_turn(
+        self,
+        instruction,
+        state,
+        *,
+        available_targets,
+        max_chunks_cap,
+    ):
+        invocation = self.invocations[len(self.calls)]
+        self.calls.append(
+            {
+                "instruction": instruction,
+                "state": state,
+                "available_targets": list(available_targets),
+                "max_chunks_cap": max_chunks_cap,
+                "invocation": invocation,
+            }
+        )
+        if invocation is None:
+            return None, "not json"
+        return invocation, json.dumps(invocation)
+
+
+class _FakeExecutors:
+    def __init__(self, *, release_task_success=True):
+        self.calls = []
+        self.release_task_success = release_task_success
+
+    def vla(self, invocation, observation, *, max_steps):
+        self.calls.append(("vla_act", invocation, observation, max_steps))
+        return LiberoVLAExecution(
+            execution=_execution(
+                len(self.calls), reason="lift_and_grasp_satisfied", steps=2
+            ),
+            tau_satisfied=True,
+            holding=invocation["target"],
+        )
+
+    def move(self, invocation, observation, *, max_steps):
+        self.calls.append(("move_to", invocation, observation, max_steps))
+        return _execution(len(self.calls))
+
+    def release(self, invocation, observation, *, max_steps):
+        self.calls.append(("release", invocation, observation, max_steps))
+        return _execution(
+            len(self.calls),
+            task_success=self.release_task_success,
+            reason=(
+                "task_success"
+                if self.release_task_success
+                else "release_completed_task_incomplete"
+            ),
+        )
+
+
+def _evaluator(tmp_path, planner, executors):
+    trace_path = tmp_path / "turns.jsonl"
+    evaluator = LiberoMultiTurnEvaluator(
+        planner,
+        vla_executor=executors.vla,
+        move_executor=executors.move,
+        release_executor=executors.release,
+        trace_path=trace_path,
+    )
+    return evaluator, trace_path
+
+
+def _happy_script():
+    return [
+        {
+            "action": "vla_act",
+            "prompt": "pick up and lift the bowl",
+            "target": "akita_black_bowl_1",
+            "max_chunks": 2,
+            "tau": "lift_and_grasp",
+        },
+        {
+            "action": "move_to",
+            "target": "plate_1",
+            "mode": "above",
+            "gripper": "close",
+        },
+        {
+            "action": "move_to",
+            "target": "plate_1",
+            "mode": "release_pose",
+            "gripper": "close",
+        },
+        {"action": "release"},
+    ]
+
+
+def test_scripted_planner_flow_reaches_official_task_success(tmp_path):
+    script = _happy_script()
+    planner = _ScriptedPlanner(script)
+    executors = _FakeExecutors()
+    evaluator, _ = _evaluator(tmp_path, planner, executors)
+
+    result = evaluator.run(
+        "place the bowl on the plate",
+        {"frame": 0, "robot0_eef_pos": [0.0, 0.0, 0.5]},
+        available_targets=TARGETS,
+        budgets=_budgets(),
+    )
+
+    assert result.task_success is True
+    assert result.primitive_success is True
+    assert result.env_done is False
+    assert result.termination_reason == "task_success"
+    assert result.turns_executed == 4
+    assert result.steps_executed == 5
+    assert result.holding is None
+    assert [call[0] for call in executors.calls] == [
+        "vla_act",
+        "move_to",
+        "move_to",
+        "release",
+    ]
+    assert all(
+        executor_call[1] is planner_call["invocation"]
+        for executor_call, planner_call in zip(executors.calls, planner.calls)
+    )
+
+
+def test_sequence_is_selected_by_planner_without_evaluator_state_machine(tmp_path):
+    script = [
+        _happy_script()[0],
+        _happy_script()[2],
+        _happy_script()[1],
+        _happy_script()[3],
+    ]
+    planner = _ScriptedPlanner(script)
+    executors = _FakeExecutors()
+    evaluator, _ = _evaluator(tmp_path, planner, executors)
+
+    result = evaluator.run(
+        "place the bowl",
+        {"frame": 0},
+        available_targets=TARGETS,
+        budgets=_budgets(),
+    )
+
+    assert result.task_success is True
+    assert [call[1]["mode"] for call in executors.calls[1:3]] == [
+        "release_pose",
+        "above",
+    ]
+
+
+def test_previous_feedback_to_planner_has_no_physical_pose_leakage(tmp_path):
+    planner = _ScriptedPlanner(_happy_script())
+    executors = _FakeExecutors()
+    evaluator, _ = _evaluator(tmp_path, planner, executors)
+
+    evaluator.run(
+        "place the bowl",
+        {"robot0_eef_pos": [0.1, 0.2, 0.3], "contact": "oracle"},
+        available_targets=TARGETS,
+        budgets=_budgets(),
+    )
+
+    second_state = planner.calls[1]["state"]
+    encoded_state = json.dumps(second_state)
+    assert second_state["holding"] == "akita_black_bowl_1"
+    assert second_state["last_feedback"]["tau_satisfied"] is True
+    assert "robot0_eef_pos" not in encoded_state
+    assert "physical_pose" not in encoded_state
+    assert "contact" not in encoded_state
+
+
+def test_release_without_holding_is_blocked_without_executor_call(tmp_path):
+    planner = _ScriptedPlanner([{"action": "release"}])
+    executors = _FakeExecutors()
+    evaluator, trace_path = _evaluator(tmp_path, planner, executors)
+
+    result = evaluator.run(
+        "place the bowl",
+        {"frame": 0},
+        available_targets=TARGETS,
+        budgets=_budgets(),
+    )
+
+    assert result.termination_reason == "release_without_holding"
+    assert result.steps_executed == 0
+    assert executors.calls == []
+    assert load_complete_jsonl(trace_path)[0]["feedback"]["steps_executed"] == 0
+
+
+@pytest.mark.parametrize(
+    "invocation",
+    [
+        {
+            "action": "move_to",
+            "target": "plate_1",
+            "mode": "above",
+            "gripper": "close",
+        },
+        {
+            "action": "move_to",
+            "target": "plate_1",
+            "mode": "above",
+            "gripper": "open",
+        },
+    ],
+)
+def test_move_to_with_incompatible_holding_is_blocked(tmp_path, invocation):
+    planner = _ScriptedPlanner([invocation])
+    executors = _FakeExecutors()
+    evaluator, _ = _evaluator(tmp_path, planner, executors)
+
+    result = evaluator.run(
+        "place the bowl",
+        {"frame": 0},
+        available_targets=TARGETS,
+        budgets=_budgets(),
+        holding=None,
+    )
+
+    assert result.termination_reason == "grasp_lost"
+    assert result.steps_executed == 0
+    assert executors.calls == []
+
+
+def test_release_task_incomplete_can_continue_when_budget_remains(tmp_path):
+    planner = _ScriptedPlanner(
+        [
+            {"action": "release"},
+            {
+                "action": "vla_act",
+                "prompt": "recover the bowl",
+                "target": "akita_black_bowl_1",
+                "max_chunks": 1,
+                "tau": "lift_and_grasp",
+            },
+        ]
+    )
+    executors = _FakeExecutors(release_task_success=False)
+
+    def successful_vla(invocation, observation, *, max_steps):
+        executors.calls.append(("vla_act", invocation, observation, max_steps))
+        return LiberoVLAExecution(
+            _execution(2, task_success=True, reason="task_success"),
+            tau_satisfied=True,
+            holding=invocation["target"],
+        )
+
+    trace_path = tmp_path / "turns.jsonl"
+    evaluator = LiberoMultiTurnEvaluator(
+        planner,
+        vla_executor=successful_vla,
+        move_executor=executors.move,
+        release_executor=executors.release,
+        trace_path=trace_path,
+    )
+
+    result = evaluator.run(
+        "place the bowl",
+        {"frame": 0},
+        available_targets=TARGETS,
+        budgets=_budgets(),
+        holding="akita_black_bowl_1",
+    )
+
+    assert result.task_success is True
+    assert result.turns_executed == 2
+    records = load_complete_jsonl(trace_path)
+    assert records[0]["feedback"]["recoverable"] is True
+    assert records[0]["feedback"]["holding"] is None
+
+
+def test_max_turns_stops_before_an_additional_planner_call(tmp_path):
+    planner = _ScriptedPlanner(_happy_script())
+    executors = _FakeExecutors()
+    evaluator, _ = _evaluator(tmp_path, planner, executors)
+
+    result = evaluator.run(
+        "place the bowl",
+        {"frame": 0},
+        available_targets=TARGETS,
+        budgets=_budgets(max_turns=2),
+    )
+
+    assert result.termination_reason == "max_turns_exhausted"
+    assert result.turns_executed == 2
+    assert len(planner.calls) == 2
+    assert len(executors.calls) == 2
+
+
+def test_horizon_is_passed_as_hard_cap_and_never_exceeded(tmp_path):
+    planner = _ScriptedPlanner(_happy_script())
+    calls = []
+
+    def vla(invocation, observation, *, max_steps):
+        calls.append((invocation, max_steps))
+        return LiberoVLAExecution(
+            _execution(1, reason="lift_and_grasp_satisfied", steps=max_steps),
+            tau_satisfied=True,
+            holding=invocation["target"],
+        )
+
+    def move(invocation, observation, *, max_steps):
+        calls.append((invocation, max_steps))
+        return _execution(2, steps=max_steps)
+
+    evaluator = LiberoMultiTurnEvaluator(
+        planner,
+        vla_executor=vla,
+        move_executor=move,
+        release_executor=move,
+        trace_path=tmp_path / "turns.jsonl",
+    )
+
+    result = evaluator.run(
+        "place the bowl",
+        {"frame": 0},
+        available_targets=TARGETS,
+        budgets=_budgets(horizon=3),
+    )
+
+    assert result.termination_reason == "horizon_exhausted"
+    assert result.steps_executed == 3
+    assert [max_steps for _, max_steps in calls] == [3]
+    assert len(planner.calls) == 1
+
+
+def test_planner_parse_error_is_traced_without_dispatch(tmp_path):
+    planner = _ScriptedPlanner([None])
+    executors = _FakeExecutors()
+    evaluator, trace_path = _evaluator(tmp_path, planner, executors)
+
+    result = evaluator.run(
+        "place the bowl",
+        {"frame": 0},
+        available_targets=TARGETS,
+        budgets=_budgets(),
+    )
+
+    assert result.termination_reason == "planner_parse_error"
+    assert executors.calls == []
+    assert load_complete_jsonl(trace_path) == [
+        {
+            "turn": 1,
+            "planner_raw_output": "not json",
+            "invocation": None,
+            "feedback": {
+                "action": None,
+                "primitive_success": False,
+                "task_success": False,
+                "env_done": False,
+                "termination_reason": "planner_parse_error",
+                "steps_executed": 0,
+                "holding": None,
+                "recoverable": False,
+            },
+            "primitive_trace": [],
+        }
+    ]
+
+
+def test_trace_has_one_reconstructable_record_per_turn(tmp_path):
+    planner = _ScriptedPlanner(_happy_script())
+    executors = _FakeExecutors()
+    evaluator, trace_path = _evaluator(tmp_path, planner, executors)
+
+    evaluator.run(
+        "place the bowl",
+        {"frame": 0},
+        available_targets=TARGETS,
+        budgets=_budgets(),
+    )
+
+    records = load_complete_jsonl(trace_path)
+    assert [record["turn"] for record in records] == [1, 2, 3, 4]
+    assert [record["invocation"] for record in records] == _happy_script()
+    assert all("planner_raw_output" in record for record in records)
+    assert all("primitive_trace" in record for record in records)
+    assert all(
+        set(record["feedback"])
+        >= {
+            "primitive_success",
+            "task_success",
+            "env_done",
+            "termination_reason",
+            "steps_executed",
+            "holding",
+        }
+        for record in records
+    )

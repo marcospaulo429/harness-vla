@@ -1,0 +1,99 @@
+import pytest
+
+from embodiedbench.planner.harness.libero_multi_turn_planner import (
+    LiberoMultiTurnPlanner,
+    MULTI_TURN_SYSTEM_PROMPT,
+    parse_libero_multi_turn_invocation,
+)
+
+
+TARGETS = ["akita_black_bowl_1", "plate_1"]
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        (
+            '{"action":"vla_act","prompt":"grasp the bowl",'
+            '"target":"akita_black_bowl_1","max_chunks":3,'
+            '"tau":"lift_and_grasp"}',
+            {
+                "action": "vla_act",
+                "prompt": "grasp the bowl",
+                "target": "akita_black_bowl_1",
+                "max_chunks": 3,
+                "tau": "lift_and_grasp",
+            },
+        ),
+        (
+            '{"action":"move_to","target":"plate_1",'
+            '"mode":"above","gripper":"close"}',
+            {
+                "action": "move_to",
+                "target": "plate_1",
+                "mode": "above",
+                "gripper": "close",
+            },
+        ),
+        ('{"action":"release"}', {"action": "release"}),
+    ],
+)
+def test_parser_accepts_published_initial_primitives(raw, expected):
+    assert parse_libero_multi_turn_invocation(
+        raw, available_targets=TARGETS, max_chunks_cap=4
+    ) == expected
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "not json",
+        '{"action":"grasp","target":"akita_black_bowl_1"}',
+        '{"action":"move_to","target":"invented","mode":"above","gripper":"close"}',
+        '{"action":"move_to","target":"plate_1","mode":"above","gripper":"open"}',
+        '{"action":"move_to","target":"plate_1","mode":"raw","gripper":"close"}',
+        '{"action":"move_to","target":"plate_1","mode":"above","gripper":"close","xyz":[0,0,0]}',
+        '{"action":"release","task_success":true}',
+        '{"action":"vla_act","prompt":"x","target":"plate_1","max_chunks":5,"tau":"lift_and_grasp"}',
+        '{"action":"vla_act","prompt":"x","target":"plate_1","max_chunks":1,"tau":"task_success"}',
+    ],
+)
+def test_parser_rejects_unsafe_or_out_of_contract_invocations(raw):
+    assert parse_libero_multi_turn_invocation(
+        raw, available_targets=TARGETS, max_chunks_cap=4
+    ) is None
+
+
+@pytest.mark.parametrize("cap", [0, -1, True, 1.5])
+def test_parser_rejects_invalid_caps(cap):
+    with pytest.raises(ValueError):
+        parse_libero_multi_turn_invocation(
+            '{"action":"release"}', available_targets=TARGETS, max_chunks_cap=cap
+        )
+
+
+def test_planner_turn_contains_semantic_state_without_pose_or_oracle():
+    class FakePlanner(LiberoMultiTurnPlanner):
+        def _chat(self, user_prompt):
+            self.seen_prompt = user_prompt
+            return '{"action":"release"}'
+
+    planner = FakePlanner("gemma-test", think=True)
+    invocation, _ = planner.act_turn(
+        "place the bowl on the plate",
+        {
+            "holding": "akita_black_bowl_1",
+            "last_action": "move_to",
+            "last_feedback": {"primitive_success": True, "task_success": False},
+            "budget": {"turns_remaining": 2, "actions_remaining": 30},
+        },
+        available_targets=TARGETS,
+        max_chunks_cap=4,
+    )
+
+    assert invocation == {"action": "release"}
+    assert "holding" in planner.seen_prompt
+    assert "Grounded target names" in planner.seen_prompt
+    assert "robot0_eef_pos" not in planner.seen_prompt
+    assert "oracle" not in planner.seen_prompt.lower()
+    assert "exactly one JSON primitive" in MULTI_TURN_SYSTEM_PROMPT

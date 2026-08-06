@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from embodiedbench.planner.harness.libero_primitives import (
     LiberoPrimitiveError,
+    compile_gripper_action,
     compile_move_action,
     pose_postcondition,
 )
@@ -30,6 +31,46 @@ class LiberoPrimitiveExecution:
     termination_reason: str
     steps_executed: int
     trace: List[Dict[str, Any]]
+
+
+def execute_release_primitive(
+    env,
+    observation: Dict[str, Any],
+    *,
+    max_steps: int,
+) -> LiberoPrimitiveExecution:
+    """Hold the current pose while commanding the native gripper open."""
+    if isinstance(max_steps, bool) or not isinstance(max_steps, int) or max_steps < 1:
+        raise LiberoPrimitiveError("max_steps must be an integer greater than zero")
+
+    current = observation
+    trace = []
+    checker = getattr(env, "check_success", None)
+    action = compile_gripper_action("open")
+    for step_index in range(max_steps):
+        current, reward, done, info = _unpack_step(env.step(action.tolist()))
+        trace.append(
+            {
+                "step": step_index + 1,
+                "action": action.tolist(),
+                "reward": reward,
+                "env_done": done,
+                "info": info,
+            }
+        )
+        task_success = bool(checker() if callable(checker) else False)
+        if task_success:
+            return LiberoPrimitiveExecution(
+                current, True, True, "task_success", step_index + 1, trace
+            )
+        if done:
+            return LiberoPrimitiveExecution(
+                current, False, False, "env_done", step_index + 1, trace
+            )
+
+    return LiberoPrimitiveExecution(
+        current, True, False, "release_completed_task_incomplete", max_steps, trace
+    )
 
 
 def execute_pose_primitive(
@@ -97,4 +138,8 @@ def execute_pose_primitive(
     raise AssertionError("unreachable")
 
 
-__all__ = ["LiberoPrimitiveExecution", "execute_pose_primitive"]
+__all__ = [
+    "LiberoPrimitiveExecution",
+    "execute_pose_primitive",
+    "execute_release_primitive",
+]

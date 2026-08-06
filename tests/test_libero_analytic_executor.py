@@ -1,7 +1,10 @@
 import numpy as np
 import pytest
 
-from embodiedbench.evaluator.libero_analytic_executor import execute_pose_primitive
+from embodiedbench.evaluator.libero_analytic_executor import (
+    execute_pose_primitive,
+    execute_release_primitive,
+)
 from embodiedbench.planner.harness.libero_primitives import LiberoPrimitiveError
 
 
@@ -103,6 +106,42 @@ def test_step_budget_exhaustion_is_explicit():
     assert result.steps_executed == 2
 
 
+def test_release_holds_pose_and_uses_native_open_convention():
+    env = _FakeOscEnv()
+    initial = env.observation()
+
+    result = execute_release_primitive(env, initial, max_steps=2)
+
+    assert result.primitive_success is True
+    assert result.task_success is False
+    assert result.termination_reason == "release_completed_task_incomplete"
+    assert result.steps_executed == 2
+    assert all(action[:6] == [0.0] * 6 for action in env.actions)
+    assert all(action[6] == -1.0 for action in env.actions)
+    np.testing.assert_allclose(result.observation["robot0_eef_pos"], initial["robot0_eef_pos"])
+
+
+def test_release_reports_official_success_separately():
+    env = _FakeOscEnv(success_after=1)
+
+    result = execute_release_primitive(env, env.observation(), max_steps=3)
+
+    assert result.primitive_success is True
+    assert result.task_success is True
+    assert result.termination_reason == "task_success"
+    assert result.steps_executed == 1
+
+
+def test_release_env_done_is_not_success():
+    env = _FakeOscEnv(done_after=1)
+
+    result = execute_release_primitive(env, env.observation(), max_steps=3)
+
+    assert result.primitive_success is False
+    assert result.task_success is False
+    assert result.termination_reason == "env_done"
+
+
 @pytest.mark.parametrize("max_steps", [0, -1, True, 1.5])
 def test_invalid_step_budgets_fail_closed(max_steps):
     env = _FakeOscEnv()
@@ -115,3 +154,10 @@ def test_invalid_step_budgets_fail_closed(max_steps):
             max_steps=max_steps,
             position_tolerance=0.01,
         )
+
+
+@pytest.mark.parametrize("max_steps", [0, -1, True, 1.5])
+def test_release_rejects_invalid_step_budgets(max_steps):
+    env = _FakeOscEnv()
+    with pytest.raises(LiberoPrimitiveError):
+        execute_release_primitive(env, env.observation(), max_steps=max_steps)
