@@ -130,19 +130,27 @@ class LiberoMultiTurnPlanner(LiberoVLAPlanner):
         *,
         available_targets: Sequence[str],
         max_chunks_cap: int,
+        memory_context: Optional[str] = None,
     ) -> Tuple[Optional[Dict[str, object]], str]:
         """Choose one primitive from the current semantic state."""
         _valid_cap(max_chunks_cap, "max_chunks_cap")
-        user_prompt = "\n".join(
-            [
+        if memory_context is not None:
+            if not isinstance(memory_context, str) or not memory_context.strip():
+                raise ValueError("memory_context must be a non-empty string")
+            forbidden = ("xyz", "pose", "coordinate")
+            if any(token in memory_context.casefold() for token in forbidden):
+                raise ValueError("memory_context must contain symbolic information only")
+        prompt_lines = [
                 "Official task instruction: %s" % instruction,
                 "Grounded target names: %s" % json.dumps(list(available_targets)),
                 "Remaining vla_act chunk cap: %d" % max_chunks_cap,
                 "Current semantic state: %s"
                 % json.dumps(state, sort_keys=True, separators=(",", ":")),
-                "Return exactly one JSON primitive.",
-            ]
-        )
+        ]
+        if memory_context is not None:
+            prompt_lines.extend(("Deployment memory context:", memory_context.strip()))
+        prompt_lines.append("Return exactly one JSON primitive.")
+        user_prompt = "\n".join(prompt_lines)
         raw_output = self._chat(user_prompt)
         invocation = parse_libero_multi_turn_invocation(
             raw_output,

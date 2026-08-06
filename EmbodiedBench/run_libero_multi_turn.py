@@ -2,6 +2,7 @@
 
 import argparse
 from datetime import datetime
+import json
 from pathlib import Path
 
 from embodiedbench.evaluator.libero_multi_turn_evaluator import (
@@ -10,11 +11,16 @@ from embodiedbench.evaluator.libero_multi_turn_evaluator import (
 from embodiedbench.evaluator.libero_multi_turn_run import (
     run_libero_multi_turn_episode,
 )
+from embodiedbench.evaluator.libero_memory_lifecycle import prepare_deployment
 from embodiedbench.evaluator.libero_native_multi_turn import LiberoNativeOffsets
 from embodiedbench.evaluator.run_artifacts import create_run_root
 from embodiedbench.planner.harness.libero_multi_turn_planner import (
     LiberoMultiTurnPlanner,
 )
+from embodiedbench.planner.harness.libero_visual_grounding import (
+    OllamaVisualPixelLocator,
+)
+from embodiedbench.planner.harness.phase_policy import PhaseManifest
 from embodiedbench.planner.harness.pirlinf_backend import PiRLinfWebsocketBackend
 
 
@@ -40,6 +46,14 @@ def parse_args():
         "--planner-base-url", default="http://localhost:11434/v1"
     )
     parser.add_argument("--think", action="store_true")
+    parser.add_argument("--phase-manifest", type=Path)
+    parser.add_argument("--phase", choices=("bootstrap", "deployment"))
+    parser.add_argument("--protocol-seed", type=int)
+    parser.add_argument("--task-memory-dir", type=Path)
+    parser.add_argument("--global-memory-ledger", type=Path)
+    parser.add_argument("--visual-locator-model")
+    parser.add_argument("--visual-locator-base-url", default="http://127.0.0.1:11434")
+    parser.add_argument("--file-repl-dir", type=Path)
     parser.add_argument(
         "--output-root",
         type=Path,
@@ -108,6 +122,35 @@ def main():
             above_m=args.above_offset_m,
             release_pose_m=args.release_pose_offset_m,
         )
+        phase_manifest = None
+        memory_session = None
+        if args.phase_manifest is not None:
+            payload = json.loads(args.phase_manifest.read_text(encoding="utf-8"))
+            phase_manifest = PhaseManifest(
+                bootstrap_seed=payload["bootstrap_seed"],
+                evaluation_seeds=tuple(payload["evaluation_seeds"]),
+                bootstrap_budget=payload["bootstrap_budget"],
+                deployment_budget=payload["deployment_budget"],
+            )
+        if args.phase == "deployment":
+            if phase_manifest is None or args.task_memory_dir is None or args.global_memory_ledger is None:
+                raise ValueError(
+                    "deployment requires phase manifest and both memory paths"
+                )
+            memory_session = prepare_deployment(
+                phase_manifest,
+                seed=args.seed,
+                task_memory_dir=str(args.task_memory_dir),
+                global_ledger_path=str(args.global_memory_ledger),
+            )
+        visual_locator = (
+            OllamaVisualPixelLocator(
+                args.visual_locator_model,
+                base_url=args.visual_locator_base_url,
+            )
+            if args.visual_locator_model
+            else None
+        )
         result = run_libero_multi_turn_episode(
             env=env,
             backend=backend,
@@ -124,6 +167,12 @@ def main():
             position_tolerance=args.position_tolerance_m,
             resize_with_pad=image_tools.resize_with_pad,
             convert_to_uint8=image_tools.convert_to_uint8,
+            phase_manifest=phase_manifest,
+            phase=args.phase,
+            protocol_seed=args.protocol_seed,
+            deployment_memory_session=memory_session,
+            file_repl_dir=args.file_repl_dir,
+            visual_locator=visual_locator,
         )
         print("SUCCESS: %s" % result["episode"]["task_success"])
         print("ARTIFACTS: %s" % run_root)

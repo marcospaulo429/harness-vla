@@ -13,18 +13,34 @@ from embodiedbench.evaluator.libero_multi_turn_evaluator import (
     LiberoMultiTurnBudgets,
     LiberoMultiTurnEvaluator,
 )
+from embodiedbench.evaluator.libero_file_repl_bridge import (
+    LiberoFileREPLBridge,
+    LiberoProtocolMetadata,
+)
+from embodiedbench.evaluator.libero_memory_lifecycle import DeploymentMemorySession
 from embodiedbench.evaluator.libero_native_multi_turn import (
     LiberoNativeExecutionState,
     LiberoNativeOffsets,
     make_native_move_executor,
     make_native_release_executor,
     make_native_vla_executor,
+    VisualLiftAndGraspMonitor,
 )
 from embodiedbench.evaluator.libero_vla_smoke import LIBERO_DUMMY_ACTION
 from embodiedbench.planner.harness.libero_grounding import (
     calibration_from_sim,
     depth_to_meters,
     ground_instance,
+)
+from embodiedbench.planner.harness.libero_visual_grounding import (
+    VisualPixelObservation,
+    ground_visual_instance,
+)
+from embodiedbench.planner.harness.phase_policy import (
+    Phase,
+    PhaseManifest,
+    PhaseOperation,
+    validate_phase_manifest,
 )
 from embodiedbench.planner.harness.trace_io import (
     resolve_git_commit,
@@ -91,6 +107,53 @@ def _native_grounder(env, observation, camera: str, frame_id: int):
     return grounder
 
 
+def _visual_grounder(
+    env,
+    observation,
+    camera: str,
+    frame_id: int,
+    locator,
+    target_descriptions: Mapping[str, str],
+):
+    depth = np.asarray(observation["%s_depth" % camera])
+    height, width = depth.shape[:2]
+    sim = env.env.sim
+    calibration = calibration_from_sim(sim, camera, height, width, frame_id)
+    grounding_frame = frame_id
+
+    def grounder(current_observation, target):
+        nonlocal grounding_frame
+        grounding_frame += 1
+        current_calibration = replace(calibration, frame_id=grounding_frame)
+        metric_depth = depth_to_meters(
+            sim, current_observation["%s_depth" % camera]
+        )
+        return ground_visual_instance(
+            VisualPixelObservation(current_observation["%s_image" % camera]),
+            target_descriptions[target],
+            current_calibration,
+            metric_depth,
+            locator,
+        )
+
+    return grounder
+
+
+def _semantic_maps(targets, object_labels, object_roles):
+    labels = {
+        target: str((object_labels or {}).get(target) or target.replace("_", " "))
+        for target in targets
+    }
+    if object_roles is None:
+        roles = {
+            target: ["manipulable" if index == 0 else "destination"]
+            for index, target in enumerate(targets)
+        }
+    else:
+        roles = {target: list(object_roles.get(target, ())) for target in targets}
+    return labels, roles
+
+
 def run_libero_multi_turn_episode(
     *,
     env,
@@ -116,6 +179,16 @@ def run_libero_multi_turn_episode(
     camera: str = "agentview",
     video_writer: Callable[[Path, Sequence[np.ndarray]], None] = _default_video_writer,
     backend_name: str = "pirlinf_websocket",
+    phase_manifest: Optional[PhaseManifest] = None,
+    phase: Optional[str] = None,
+    protocol_seed: Optional[int] = None,
+    deployment_memory_session: Optional[DeploymentMemorySession] = None,
+    file_repl_dir=None,
+    visual_locator=None,
+    target_descriptions: Optional[Mapping[str, str]] = None,
+    object_labels: Optional[Mapping[str, str]] = None,
+    object_roles: Optional[Mapping[str, Sequence[str]]] = None,
+    reset_environment: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Run one episode and durably persist its manifest, trace, video and result."""
     root = Path(run_root)
@@ -131,6 +204,30 @@ def run_libero_multi_turn_episode(
     if not isinstance(camera, str) or not camera:
         raise ValueError("camera must be a non-empty string")
 
+    resolved_phase = None
+    phase_policy = None
+    if phase_manifest is not None:
+        validate_phase_manifest(phase_manifest)
+        if phase is None:
+            raise ValueError("phase is required with phase_manifest")
+        resolved_phase = Phase(phase)
+        phase_policy = phase_manifest.policy_for(resolved_phase)
+        phase_manifest.guard_operation(resolved_phase, seed, PhaseOperation.READ_MEMORY)
+        budgets = replace(
+            budgets,
+            max_turns=min(budgets.max_turns, phase_policy.budget),
+            horizon=min(budgets.horizon, phase_policy.budget),
+        )
+        if resolved_phase is Phase.DEPLOYMENT:
+            if not isinstance(deployment_memory_session, DeploymentMemorySession):
+                raise ValueError("deployment requires DeploymentMemorySession")
+            if deployment_memory_session.manifest != phase_manifest:
+                raise ValueError("deployment memory session manifest mismatch")
+            if deployment_memory_session.seed != seed:
+                raise ValueError("deployment memory session seed mismatch")
+    elif phase is not None or deployment_memory_session is not None:
+        raise ValueError("phase and deployment memory require phase_manifest")
+
     targets = list(
         getattr(env, "obj_of_interest", ())
         if available_targets is None
@@ -138,6 +235,19 @@ def run_libero_multi_turn_episode(
     )
     if not targets or any(not isinstance(target, str) or not target for target in targets):
         raise ValueError("available_targets must contain non-empty strings")
+    labels, roles = _semantic_maps(targets, object_labels, object_roles)
+    descriptions = dict(labels)
+    descriptions.update(target_descriptions or {})
+    if any(target not in descriptions or not descriptions[target] for target in targets):
+        raise ValueError("target descriptions must cover every available target")
+
+    should_reset = (
+        resolved_phase is not Phase.DEPLOYMENT
+        if reset_environment is None
+        else bool(reset_environment)
+    )
+    if should_reset and phase_manifest is not None:
+        phase_manifest.guard_operation(resolved_phase, seed, PhaseOperation.RESET)
 
     video_root = root / "videos"
     video_root.mkdir(exist_ok=True)
@@ -145,7 +255,13 @@ def run_libero_multi_turn_episode(
     manifest = {
         "run_type": "libero_multi_turn",
         "status": "in_progress",
-        "harness_complete": False,
+        "harness_complete": bool(
+            phase_manifest is not None
+            and file_repl_dir is not None
+            and visual_locator is not None
+            and resolved_phase is Phase.DEPLOYMENT
+            and deployment_memory_session is not None
+        ),
         "implementation_scope": "reduced_multi_turn_primitive_library",
         "scientific_classification": {
             "paper_confirmed": [
@@ -159,16 +275,24 @@ def run_libero_multi_turn_episode(
                 "rgbd_target_mode_resolution",
                 "configured_offsets_tolerances_budgets",
             ],
-            "beta_only": [
-                "privileged_instance_segmentation",
-                "privileged_contact_state",
-            ],
+            "beta_only": (
+                ["visual_pixel_locator", "visual_rgbd_lift_tau"]
+                if visual_locator is not None
+                else [
+                    "privileged_instance_segmentation",
+                    "privileged_contact_state",
+                ]
+            ),
         },
         "task_memory": False,
         "global_memory": False,
-        "perception": "rgbd_with_privileged_instance_segmentation",
-        "privileged_segmentation": True,
-        "privileged_contact_state": True,
+        "perception": (
+            "visual_rgbd_locator"
+            if visual_locator is not None
+            else "rgbd_with_privileged_instance_segmentation"
+        ),
+        "privileged_segmentation": visual_locator is None,
+        "privileged_contact_state": visual_locator is None,
         "planner_receives_oracle_coordinates": False,
         "task_suite": task_suite,
         "task_id": task_id,
@@ -189,12 +313,33 @@ def run_libero_multi_turn_episode(
         },
         "git_commit": resolve_git_commit(Path(__file__)),
     }
+    if phase_manifest is not None:
+        resolved_protocol_seed = seed if protocol_seed is None else protocol_seed
+        manifest.update(
+            {
+                "phase_manifest": phase_manifest.to_dict(),
+                "phase": resolved_phase.value,
+                "reportable": phase_policy.reportable,
+                "protocol_seed": resolved_protocol_seed,
+                "memory_hashes": (
+                    dict(deployment_memory_session.hashes_before)
+                    if deployment_memory_session is not None
+                    else None
+                ),
+                "file_repl": (
+                    {"directory": str(Path(file_repl_dir))}
+                    if file_repl_dir is not None
+                    else None
+                ),
+            }
+        )
     write_json_atomic(manifest_path, manifest)
 
     frames = []
     video_path = None
     try:
-        env.reset()
+        if should_reset:
+            env.reset()
         observation = env.set_init_state(initial_state)
         frames.append(_video_frame(observation, camera))
         for _ in range(SETTLING_STEPS):
@@ -213,36 +358,98 @@ def run_libero_multi_turn_episode(
             execution_state=execution_state,
             frame_callback=frame_callback,
         )
-        if move_executor is None:
-            active_grounder = grounder or _native_grounder(
-                env, observation, camera, SETTLING_STEPS
+        active_grounder = grounder
+        if active_grounder is None and visual_locator is not None:
+            active_grounder = _visual_grounder(
+                env,
+                observation,
+                camera,
+                SETTLING_STEPS,
+                visual_locator,
+                descriptions,
             )
+        if move_executor is None:
+            if active_grounder is None:
+                active_grounder = _native_grounder(
+                    env, observation, camera, SETTLING_STEPS
+                )
             active_move_executor = make_native_move_executor(
                 env,
                 active_grounder,
                 offsets=offsets,
                 position_tolerance=tolerance,
                 execution_state=execution_state,
+                grasp_monitor=(
+                    (lambda unused_env, current, holding: bool(
+                        active_grounder(current, holding)
+                    ))
+                    if visual_locator is not None
+                    else None
+                ),
                 frame_callback=frame_callback,
             )
         else:
             active_move_executor = move_executor
+        if vla_executor is None and visual_locator is not None:
+            active_vla_executor = make_native_vla_executor(
+                env,
+                backend,
+                resize_with_pad=resize_with_pad,
+                convert_to_uint8=convert_to_uint8,
+                execution_state=execution_state,
+                tau_monitor_factory=(
+                    lambda unused_env, baseline, target: VisualLiftAndGraspMonitor(
+                        active_grounder, baseline, target
+                    )
+                ),
+                frame_callback=frame_callback,
+            )
         active_release_executor = release_executor or make_native_release_executor(
             env, execution_state=execution_state, frame_callback=frame_callback
         )
+        protocol_metadata = None
+        file_repl_bridge = None
+        if file_repl_dir is not None:
+            resolved_protocol_seed = seed if protocol_seed is None else protocol_seed
+            metadata = LiberoProtocolMetadata(
+                Path(file_repl_dir), resolved_protocol_seed
+            )
+            protocol_metadata = {
+                "protocol_seed": metadata.protocol_seed,
+                "directory": str(metadata.directory),
+            }
+            file_repl_bridge = LiberoFileREPLBridge(
+                metadata,
+                vla_executor=active_vla_executor,
+                move_executor=active_move_executor,
+                release_executor=active_release_executor,
+            )
         evaluator = LiberoMultiTurnEvaluator(
             planner,
             vla_executor=active_vla_executor,
             move_executor=active_move_executor,
             release_executor=active_release_executor,
             trace_path=root / "trace.jsonl",
+            file_repl_bridge=file_repl_bridge,
         )
         result = evaluator.run(
             instruction.strip(),
             observation,
             available_targets=targets,
             budgets=budgets,
+            object_labels=labels,
+            object_roles=roles,
+            memory_context=(
+                deployment_memory_session.context
+                if deployment_memory_session is not None
+                else None
+            ),
+            protocol_metadata=protocol_metadata,
         )
+        if deployment_memory_session is not None:
+            deployment_memory_session.guard_budget(result.steps_executed)
+            memory_integrity = deployment_memory_session.finalize()
+            manifest["memory_hashes"] = memory_integrity
 
         video_status = "success" if result.task_success else "failure"
         video_path = video_root / (
