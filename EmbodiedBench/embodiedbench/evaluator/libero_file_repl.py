@@ -56,7 +56,7 @@ class LiberoFileREPL:
     def _commands(self) -> Dict[int, Path]:
         commands = {}
         for path in self.directory.glob("command_*.json"):
-            suffix = path.stem.removeprefix("command_")
+            suffix = path.stem[len("command_") :]
             if not suffix.isdigit() or int(suffix) < 1 or path.name != _name("command", int(suffix)):
                 raise LiberoFileProtocolError("invalid command filename: %s" % path.name)
             commands[int(suffix)] = path
@@ -81,7 +81,7 @@ class LiberoFileREPL:
             if not state_path.exists():
                 future_states = []
                 for path in self.directory.glob("state_*.json"):
-                    suffix = path.stem.removeprefix("state_")
+                    suffix = path.stem[len("state_") :]
                     if suffix.isdigit() and int(suffix) > turn:
                         future_states.append(path)
                 if future_states:

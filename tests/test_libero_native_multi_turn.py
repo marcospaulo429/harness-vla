@@ -281,6 +281,7 @@ def test_vla_official_stops_are_distinct_from_tau_and_do_not_set_holding(
     assert result.holding is None
     assert result.execution.termination_reason == reason
     assert result.execution.task_success is (reason == "task_success")
+    assert result.execution.primitive_success is (reason == "task_success")
 
 
 def test_tau_errors_fail_closed_remain_in_serializable_trace_and_never_hold():

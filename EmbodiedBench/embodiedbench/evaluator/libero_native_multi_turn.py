@@ -346,7 +346,7 @@ def make_native_vla_executor(
             reason = "chunk_budget_exhausted"
         primitive = LiberoPrimitiveExecution(
             observation=current,
-            primitive_success=tau_satisfied,
+            primitive_success=tau_satisfied or task_success,
             task_success=task_success,
             termination_reason=reason,
             steps_executed=steps_executed,
